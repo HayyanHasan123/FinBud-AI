@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
@@ -7,8 +8,13 @@ import sys
 import os
 import io
 
-# Add backend folder to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
+from features import (
+    init_db, log_late_payment, get_points, add_points, redeem_points,
+    add_bill, mark_paid, list_pending, generate_reminders, get_inbox,
+    detect_anomalies, create_ticket, queue_list, claim, resolve, cancel,
+    status, trigger_emergency
+)
+
 from nlp_module import BankAIConversation
 
 # Speech recognition import
@@ -19,14 +25,17 @@ except ImportError:
     SPEECH_RECOGNITION_AVAILABLE = False
     print("Warning: speech_recognition not installed.")
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+# PATH FIX: Frontend folder aik level baahir (..) hai, isliye paths update kiye hain
+app = Flask(__name__, 
+            static_folder='../Frontend/static', 
+            template_folder='../Frontend/templates')
 app.secret_key = secrets.token_hex(32)
 
 # Initialize NLP chatbot engine
 chatbot = BankAIConversation()
 
-# Database configuration
-DB = 'FinBudAi.db'
+# PATH FIX: Database ko hum main project directory (root) me rakh rahe hain taake dono folders access kar saken
+DB = os.path.join(os.path.dirname(__file__), '..', 'FinBudAi.db')
 
 def get_db():
     """Get database connection"""
@@ -108,7 +117,9 @@ def init_user_tables():
     conn.commit()
     conn.close()
 
+# Initialize tables from both modules
 init_user_tables()
+init_db()
 
 # ============= TEMPLATE ROUTES =============
 @app.route('/')
@@ -211,7 +222,6 @@ def logout():
 # ============= CHATBOT API =============
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
-    """Process user message with full feature integration"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -224,7 +234,6 @@ def chat_message():
 
         account_number = session['account_number']
 
-        # Get user data
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT name, balance, points, password_hash FROM dashboard_users WHERE account_number=?", (account_number,))
@@ -234,23 +243,18 @@ def chat_message():
             conn.close()
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
-        # Get conversation context
         conversation_context = session.get('conversation_context', {})
-
-        # Process message with NLP engine
         nlp_result = chatbot.process_message(user_message, conversation_context)
 
         intent = nlp_result['intent']
         language = nlp_result['language']
         entities = nlp_result.get('entities', {})
 
-        # ============= EMERGENCY PASSWORD HANDLING =============
         if intent == 'emergency_password_provided':
             password = entities.get('password', '')
             attempts = nlp_result.get('emergency_attempts', 3)
 
             if check_password_hash(user['password_hash'], password):
-                # Password correct - lock all cards
                 c.execute("UPDATE cards SET status='locked' WHERE account_number=?", (account_number,))
                 c.execute("INSERT INTO fraud_alerts(account_number, message, created_at) VALUES (?, ?, ?)",
                          (account_number, "Emergency mode triggered by user.", datetime.utcnow().isoformat()))
@@ -259,7 +263,6 @@ def chat_message():
                 ai_response = chatbot.responses['emergency_confirm'][language]
                 session['conversation_context'] = {}
             else:
-                # Password incorrect - track attempts
                 attempts -= 1
                 if attempts > 0:
                     ai_response = chatbot.responses['emergency_password_incorrect'][language].format(attempts=attempts)
@@ -285,7 +288,6 @@ def chat_message():
                 'language': language
             })
 
-        # ============= TRANSACTION PASSWORD HANDLING =============
         if intent == 'password_provided':
             password = entities.get('password', '')
             original_intent = nlp_result.get('original_intent')
@@ -308,18 +310,15 @@ def chat_message():
                     'language': language
                 })
 
-            # Password correct - process transaction
             if original_intent == 'transfer_money':
                 amount = entities.get('amount')
                 recipient = entities.get('recipient')
                 recipient_account = entities.get('account_number')
 
-                # Check balance
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
                     session['conversation_context'] = {}
                 else:
-                    # Process transfer
                     points_earned = int(amount // 1000) * 5
                     new_balance = user['balance'] - amount
                     new_points = user['points'] + points_earned
@@ -344,12 +343,10 @@ def chat_message():
                 amount = entities.get('amount')
                 bill_account = entities.get('account_number')
 
-                # Check balance
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
                     session['conversation_context'] = {}
                 else:
-                    # Process bill payment
                     points_earned = int(amount // 1000) * 5
                     new_balance = user['balance'] - amount
                     new_points = user['points'] + points_earned
@@ -373,14 +370,12 @@ def chat_message():
                 redemption_choice = entities.get('redemption_choice')
                 points_needed = 1000 if redemption_choice == 500 else 500
 
-                # Check points
                 if user['points'] < points_needed:
                     ai_response = chatbot.responses['insufficient_points'][language].format(
                         points=user['points'], required=points_needed
                     )
                     session['conversation_context'] = {}
                 else:
-                    # Process redemption
                     new_points = user['points'] - points_needed
                     new_balance = user['balance'] + redemption_choice
 
@@ -419,7 +414,6 @@ def chat_message():
                 'language': language
             })
 
-        # Update conversation context for multi-step flows
         if nlp_result.get('awaiting_emergency_password'):
             session['conversation_context'] = {
                 'awaiting_emergency_password': True,
@@ -438,10 +432,8 @@ def chat_message():
                     context[key] = nlp_result[key]
             session['conversation_context'] = context
         else:
-            # Clear context if no flow is active
             session['conversation_context'] = {}
 
-        # Generate response based on intent
         ai_response = nlp_result.get('ai_response')
 
         if intent == 'check_balance':
@@ -464,7 +456,6 @@ def chat_message():
             """, (account_number,))
 
             transactions = c.fetchall()
-
             ai_response = chatbot.responses['transaction_history'][language] + ":\n\n"
 
             if transactions:
@@ -481,7 +472,6 @@ def chat_message():
         elif intent == 'unknown':
             ai_response = chatbot.responses['unknown'][language]
 
-        # Save chat history
         c.execute("""
             INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
             VALUES (?, ?, ?, ?, ?)
@@ -500,13 +490,10 @@ def chat_message():
 
     except Exception as e:
         print(f"Chat error: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'success': False, 'message': 'An error occurred processing your message'}), 500
 
 @app.route('/api/chat/transcribe', methods=['POST'])
 def transcribe_audio():
-    """Transcribe audio to text"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -527,12 +514,10 @@ def transcribe_audio():
 
         try:
             audio_file_obj = io.BytesIO(audio_data)
-
             with sr.AudioFile(audio_file_obj) as source:
                 audio = recognizer.record(source)
 
             text = recognizer.recognize_google(audio)
-
             return jsonify({
                 'success': True,
                 'text': text,
@@ -540,16 +525,9 @@ def transcribe_audio():
             })
 
         except sr.UnknownValueError:
-            return jsonify({
-                'success': False,
-                'message': 'Could not understand audio.'
-            }), 400
-
+            return jsonify({'success': False, 'message': 'Could not understand audio.'}), 400
         except sr.RequestError:
-            return jsonify({
-                'success': False,
-                'message': 'Speech recognition service unavailable.'
-            }), 500
+            return jsonify({'success': False, 'message': 'Speech recognition service unavailable.'}), 500
 
     except Exception as e:
         print(f"Transcription error: {str(e)}")
@@ -557,7 +535,6 @@ def transcribe_audio():
 
 @app.route('/api/chat/human-handoff', methods=['POST'])
 def human_handoff():
-    """Handle human handoff request"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -575,25 +552,19 @@ def human_handoff():
         conn.commit()
         conn.close()
 
-        return jsonify({
-            'success': True,
-            'ai_response': ai_response
-        })
+        return jsonify({'success': True, 'ai_response': ai_response})
 
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/chat/emergency', methods=['POST'])
 def emergency():
-    """Handle emergency request"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
     try:
         account_number = session['account_number']
-
         nlp_result = chatbot.process_message("emergency lock my cards", {})
-
         language = nlp_result.get('language', 'en')
         ai_response = nlp_result.get('ai_response', chatbot.responses['emergency_password_request'][language])
 
@@ -611,17 +582,13 @@ def emergency():
         conn.commit()
         conn.close()
 
-        return jsonify({
-            'success': True,
-            'ai_response': ai_response
-        })
+        return jsonify({'success': True, 'ai_response': ai_response})
 
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/chat/history', methods=['GET'])
 def chat_history():
-    """Get chat conversation history"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -649,25 +616,18 @@ def chat_history():
 
         conn.close()
         messages.reverse()
-
-        return jsonify({
-            'success': True,
-            'messages': messages
-        })
+        return jsonify({'success': True, 'messages': messages})
 
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ============= USER DATA API =============
 @app.route('/api/user/data', methods=['GET'])
 def get_user_data():
-    """Get user data for dashboard"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
     try:
         account_number = session['account_number']
-
         conn = get_db()
         c = conn.cursor()
         c.execute("""
@@ -698,7 +658,6 @@ def get_user_data():
 
 @app.route('/api/user/verify-password', methods=['POST'])
 def verify_password():
-    """Verify user password"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -710,7 +669,6 @@ def verify_password():
             return jsonify({'success': False, 'message': 'Password required'}), 400
 
         user_id = session['user_id']
-
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT password_hash FROM dashboard_users WHERE id=?", (user_id,))
@@ -730,7 +688,6 @@ def verify_password():
 
 @app.route('/api/user/change-password', methods=['POST'])
 def change_password():
-    """Change user password"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -746,7 +703,6 @@ def change_password():
             return jsonify({'success': False, 'message': 'New password must be at least 4 characters'}), 400
 
         user_id = session['user_id']
-
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT password_hash FROM dashboard_users WHERE id=?", (user_id,))
@@ -766,10 +722,8 @@ def change_password():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ============= TRANSACTION API =============
 @app.route('/api/transaction/create', methods=['POST'])
 def create_transaction():
-    """Create a new transaction"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
@@ -787,7 +741,6 @@ def create_transaction():
 
         conn = get_db()
         c = conn.cursor()
-
         c.execute("SELECT balance, points FROM dashboard_users WHERE account_number=?", (account_number,))
         user = c.fetchone()
 
@@ -836,10 +789,8 @@ def create_transaction():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ============= TRANSACTION HISTORY API =============
 @app.route('/api/transaction/history', methods=['GET'])
 def transaction_history():
-    """Get transaction history for the logged-in user"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
@@ -859,7 +810,6 @@ def transaction_history():
         
         transactions = []
         for row in c.fetchall():
-            # Format date to be more readable
             date_obj = datetime.fromisoformat(row['created_at'])
             formatted_date = date_obj.strftime('%b %d, %Y')
             
@@ -870,31 +820,21 @@ def transaction_history():
             })
         
         conn.close()
-        
-        return jsonify({
-            'success': True,
-            'transactions': transactions
-        })
+        return jsonify({'success': True, 'transactions': transactions})
         
     except Exception as e:
         print(f"Transaction history error: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
-# ============= FINANCIAL REPORTS API =============
 @app.route('/api/financial/spending-category', methods=['GET'])
 def spending_by_category():
-    """Get spending breakdown by category"""
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
         account_number = session['account_number']
-        
         conn = get_db()
         c = conn.cursor()
-        
-        # Get all transactions with negative amounts (expenses)
         c.execute("""
             SELECT transaction_type, biller, description, amount 
             FROM dashboard_transactions 
@@ -905,39 +845,134 @@ def spending_by_category():
         transactions = c.fetchall()
         conn.close()
         
-        # Categorize spending
         spending_by_category = {}
-        
         for txn in transactions:
             txn_type = txn['transaction_type']
             biller = txn['biller']
-            description = txn['description']
-            amount = abs(txn['amount'])  # Make positive for display
+            amount = abs(txn['amount'])
             
-            # Determine category
             if txn_type == 'bill':
                 category = biller if biller else 'Bill Payment'
             elif txn_type == 'transfer':
                 category = 'Transfers'
-            elif txn_type == 'redemption':
-                continue  # Skip redemptions from spending report
             else:
                 category = 'Other'
             
-            # Add to category total
             if category in spending_by_category:
                 spending_by_category[category] += amount
             else:
                 spending_by_category[category] = amount
         
-        return jsonify({
-            'success': True,
-            'spending_by_category': spending_by_category
-        })
+        return jsonify({'success': True, 'spending_by_category': spending_by_category})
         
     except Exception as e:
         print(f"Financial reports error: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ============= MIGRATED FEATURES.PY ROUTES =============
+@app.route('/points/get', methods=['GET'])
+def api_get_points():
+    acc = request.args.get('account')
+    return jsonify({"account": acc, "points": get_points(acc)})
+
+@app.route('/points/add', methods=['POST'])
+def api_add_points():
+    data = request.json
+    acc = data['account']; pts = int(data['points'])
+    reason = data.get('reason', 'no reason')
+    due_date_str = data.get('due_date')
+    if due_date_str:
+        today = datetime.now().date()
+        due_date = datetime.strptime(due_date_str, "%Y-%m-%d").date()
+        if today > due_date:
+            log_late_payment(acc, reason, due_date_str)
+            return jsonify({"success": False, "message": "Late payment - no points awarded",
+                            "account": acc, "points": get_points(acc)}), 200
+    new_points = add_points(acc, pts, reason)
+    return jsonify({"success": True, "account": acc, "points": new_points})
+
+@app.route('/points/redeem', methods=['POST'])
+def api_redeem():
+    data = request.json; acc = data['account']; cost = int(data['cost'])
+    ok, pts = redeem_points(acc, cost)
+    return jsonify({"success": ok, "remaining_points": pts})
+
+@app.route('/bills/add', methods=['POST'])
+def api_bills_add():
+    data = request.json
+    bill_id = add_bill(data['account'], data['biller'], data['amount'], data['due_date'], data.get('ref'))
+    return jsonify({"success": True, "bill_id": bill_id})
+
+@app.route('/bills/pending', methods=['GET'])
+def api_bills_pending():
+    acc = request.args.get('account')
+    items = list_pending(acc)
+    return jsonify({"account": acc, "pending": items})
+
+@app.route('/reminders/run', methods=['GET'])
+def api_reminders_run():
+    today = request.args.get('today')
+    out = generate_reminders(today_str=today)
+    return jsonify({"generated": out})
+
+@app.route('/reminders/inbox', methods=['GET'])
+def api_reminders_inbox():
+    acc = request.args.get('account')
+    inbox = get_inbox(acc)
+    return jsonify({"account": acc, "inbox": inbox})
+
+@app.route('/insights/anomalies', methods=['GET'])
+def api_anomalies():
+    acc = request.args.get('account')
+    items = detect_anomalies(acc)
+    return jsonify({"account": acc, "anomalies": items})
+
+@app.route('/handoff/create', methods=['POST'])
+def api_handoff_create():
+    data = request.json
+    acc = data['account']; reason = data.get('reason', 'user_requested_human')
+    ticket_id = create_ticket(acc, reason)
+    return jsonify({"status": "queued", "ticket_id": ticket_id})
+
+@app.route('/handoff/queue', methods=['GET'])
+def api_handoff_queue():
+    status_q = request.args.get('status', 'pending')
+    out = queue_list(status=status_q)
+    return jsonify({"tickets": out})
+
+@app.route('/handoff/claim', methods=['POST'])
+def api_handoff_claim():
+    data = request.json
+    ticket_id = int(data['ticket_id']); banker_id = data.get('banker_id', 'banker-1')
+    ok = claim(ticket_id, banker_id)
+    return jsonify({"success": ok})
+
+@app.route('/handoff/resolve', methods=['POST'])
+def api_handoff_resolve():
+    data = request.json; ticket_id = int(data['ticket_id'])
+    ok = resolve(ticket_id)
+    return jsonify({"success": ok})
+
+@app.route('/handoff/cancel', methods=['POST'])
+def api_handoff_cancel():
+    data = request.json; ticket_id = int(data['ticket_id'])
+    ok = cancel(ticket_id)
+    return jsonify({"success": ok})
+
+@app.route('/handoff/status', methods=['GET'])
+def api_handoff_status():
+    acc = request.args.get('account')
+    st = status(acc)
+    return jsonify({"account": acc, **st})
+
+@app.route('/emergency/trigger', methods=['POST'])
+def api_emergency_trigger():
+    data = request.json; acc = data['account']; entered_password = data['password']
+    real_password = "mypassword"
+    result = trigger_emergency(acc, real_password, entered_password)
+    return jsonify(result)
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

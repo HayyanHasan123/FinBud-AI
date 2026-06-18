@@ -1,9 +1,7 @@
-# final_app.py
-from flask import Flask, request, jsonify
+# features.py
 import sqlite3
 from datetime import datetime, date
 
-app = Flask(__name__)
 DB = 'FinBudAi.db'
 
 # ---------- DATABASE INIT ----------
@@ -103,27 +101,6 @@ def init_db():
       assigned_to TEXT,
       updated_at TEXT
     )''')
-
-    # Queue where AI → human tickets are stored
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS handoff_queue(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_number TEXT,
-    reason TEXT,
-    status TEXT DEFAULT 'pending',   -- pending | in_progress | resolved | canceled
-    created_at TEXT
-    )
-    ''')
-
-    # Conversation state: tracks who’s handling the user (bot or human)
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS conversation_state(
-    account_number TEXT PRIMARY KEY,
-    mode TEXT DEFAULT 'bot',         -- 'bot' or 'human'
-    assigned_to TEXT,                -- banker ID or name
-    updated_at TEXT
-    )
-    ''')
 
     # Cards table
     c.execute('''
@@ -417,113 +394,3 @@ def trigger_emergency(account, password, entered_password):
     alert_fraud_team(account, "Emergency mode triggered by user.")
     guide = safety_guide()
     return {"success": True, "steps": guide}
-
-
-# ---------- ROUTES ----------
-@app.route('/points/get', methods=['GET'])
-def api_get_points():
-    acc = request.args.get('account')
-    return jsonify({"account": acc, "points": get_points(acc)})
-
-@app.route('/points/add', methods=['POST'])
-def api_add_points():
-    data = request.json
-    acc = data['account']; pts = int(data['points'])
-    reason = data.get('reason', 'no reason')
-    due_date_str = data.get('due_date')
-    if due_date_str:
-        today = datetime.now().date()
-        due_date = datetime.strptime(due_date_str, "%Y-%m-%d").date()
-        if today > due_date:
-            log_late_payment(acc, reason, due_date_str)
-            return jsonify({"success": False, "message": "Late payment - no points awarded",
-                            "account": acc, "points": get_points(acc)}), 200
-    new_points = add_points(acc, pts, reason)
-    return jsonify({"success": True, "account": acc, "points": new_points})
-
-@app.route('/points/redeem', methods=['POST'])
-def api_redeem():
-    data = request.json; acc = data['account']; cost = int(data['cost'])
-    ok, pts = redeem_points(acc, cost)
-    return jsonify({"success": ok, "remaining_points": pts})
-
-@app.route('/bills/add', methods=['POST'])
-def api_bills_add():
-    data = request.json
-    bill_id = add_bill(data['account'], data['biller'], data['amount'], data['due_date'], data.get('ref'))
-    return jsonify({"success": True, "bill_id": bill_id})
-
-@app.route('/bills/pending', methods=['GET'])
-def api_bills_pending():
-    acc = request.args.get('account')
-    items = list_pending(acc)
-    return jsonify({"account": acc, "pending": items})
-
-@app.route('/reminders/run', methods=['GET'])
-def api_reminders_run():
-    today = request.args.get('today')
-    out = generate_reminders(today_str=today)
-    return jsonify({"generated": out})
-
-@app.route('/reminders/inbox', methods=['GET'])
-def api_reminders_inbox():
-    acc = request.args.get('account')
-    inbox = get_inbox(acc)
-    return jsonify({"account": acc, "inbox": inbox})
-
-@app.route('/insights/anomalies', methods=['GET'])
-def api_anomalies():
-    acc = request.args.get('account')
-    items = detect_anomalies(acc)
-    return jsonify({"account": acc, "anomalies": items})
-
-# ---------- HANDOFF ROUTES ----------
-@app.route('/handoff/create', methods=['POST'])
-def api_handoff_create():
-    data = request.json
-    acc = data['account']; reason = data.get('reason', 'user_requested_human')
-    ticket_id = create_ticket(acc, reason)
-    return jsonify({"status": "queued", "ticket_id": ticket_id})
-
-@app.route('/handoff/queue', methods=['GET'])
-def api_handoff_queue():
-    status_q = request.args.get('status', 'pending')
-    out = queue_list(status=status_q)
-    return jsonify({"tickets": out})
-
-@app.route('/handoff/claim', methods=['POST'])
-def api_handoff_claim():
-    data = request.json
-    ticket_id = int(data['ticket_id']); banker_id = data.get('banker_id', 'banker-1')
-    ok = claim(ticket_id, banker_id)
-    return jsonify({"success": ok})
-
-@app.route('/handoff/resolve', methods=['POST'])
-def api_handoff_resolve():
-    data = request.json; ticket_id = int(data['ticket_id'])
-    ok = resolve(ticket_id)
-    return jsonify({"success": ok})
-
-@app.route('/handoff/cancel', methods=['POST'])
-def api_handoff_cancel():
-    data = request.json; ticket_id = int(data['ticket_id'])
-    ok = cancel(ticket_id)
-    return jsonify({"success": ok})
-
-@app.route('/handoff/status', methods=['GET'])
-def api_handoff_status():
-    acc = request.args.get('account')
-    st = status(acc)
-    return jsonify({"account": acc, **st})
-
-@app.route('/emergency/trigger', methods=['POST'])
-def api_emergency_trigger():
-    data = request.json; acc = data['account']; entered_password = data['password']
-    real_password = "mypassword"
-    result = trigger_emergency(acc, real_password, entered_password)
-    return jsonify(result)
-
-
-if __name__ == "__main__":
-    init_db()
-    app.run(host="0.0.0.0", port=5001, debug=True)
