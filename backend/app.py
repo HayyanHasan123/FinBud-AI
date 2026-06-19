@@ -27,8 +27,8 @@ except ImportError:
 
 # PATH FIX: Frontend folder aik level baahir (..) hai, isliye paths update kiye hain
 app = Flask(__name__, 
-            static_folder='../Frontend/static', 
-            template_folder='../Frontend/templates')
+            static_folder='../frontend/static', 
+            template_folder='../frontend/templates')
 app.secret_key = secrets.token_hex(32)
 
 # Initialize NLP chatbot engine
