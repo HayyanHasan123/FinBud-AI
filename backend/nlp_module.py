@@ -7,6 +7,35 @@ import re
 from typing import Dict, Optional, Tuple
 
 
+# Compliance / PII: fields that must never leak into logs or downstream payloads
+SENSITIVE_FIELDS = {'password'}
+
+
+def scrub_sensitive_data(data_dict: dict) -> dict:
+    """
+    Recursively scrub a dictionary, replacing any string value whose key is in
+    SENSITIVE_FIELDS with a redaction placeholder. Works on nested dicts and
+    dicts nested inside lists. Returns a new dict; does not mutate the input.
+    """
+    if not isinstance(data_dict, dict):
+        return data_dict
+
+    scrubbed = {}
+    for key, value in data_dict.items():
+        if key in SENSITIVE_FIELDS and isinstance(value, str):
+            scrubbed[key] = "[REDACTED]"
+        elif isinstance(value, dict):
+            scrubbed[key] = scrub_sensitive_data(value)
+        elif isinstance(value, list):
+            scrubbed[key] = [
+                scrub_sensitive_data(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            scrubbed[key] = value
+    return scrubbed
+
+
 class BankAIConversation:
     """
     Pure NLP engine for banking conversations
@@ -45,16 +74,22 @@ class BankAIConversation:
                 r'(last|pichle)\s*transaction',
             ],
             
+            # redeem_points is checked before check_rewards: its patterns are
+            # strictly more specific (they require "redeem"/"use"/"exchange"
+            # alongside "points"), whereas check_rewards's bare
+            # `(reward|points)` pattern would otherwise win the match race
+            # for phrases like "I want to use my points" and shadow the
+            # more specific redeem intent entirely.
+            'redeem_points': [
+                r'redeem\s*(my\s*|your\s*)?(points|rewards)',
+                r'(use|exchange)\s*(my\s*|your\s*)?points',
+                r'points\s*(redeem|use)',
+            ],
+
             'check_rewards': [
                 r'(reward|points)',
                 r'(mere|my)\s*points',
                 r'kitne\s*points',
-            ],
-            
-            'redeem_points': [
-                r'redeem\s*(points|rewards)',
-                r'(use|exchange)\s*points',
-                r'points\s*(redeem|use)',
             ],
             
             'bill_reminders': [
@@ -268,45 +303,110 @@ class BankAIConversation:
         return text_lower
     
     def extract_amount(self, text: str) -> Optional[int]:
-        """Extract amount from text"""
-        patterns = [
-            r'rs\.?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
-            r'pkr\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
-            r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*rupees',
-            r'\b(\d+(?:,\d{3})*(?:\.\d{2})?)\b',
+        """
+        Extract amount from text.
+
+        Fixes vs. the original implementation:
+        - EC-2: the numeric token now accepts South-Asian lakh/crore digit
+          groupings (e.g. "5,00,000") in addition to standard thousands
+          groupings (e.g. "500,000") - any comma grouping is accepted and
+          simply stripped before parsing.
+        - EC-1: currency-marked amounts (Rs./PKR/rupees) are always preferred
+          over bare numbers. If no currency marker is present and multiple
+          bare numbers exist (e.g. "I have 2 accounts, send 5000"), the
+          largest value is used instead of blindly taking the leftmost match,
+          since incidental context numbers are typically small relative to
+          the actual transaction amount.
+        - EC-3: decimals are preserved through float conversion rather than
+          being stripped, so "100.50" never mutates into "10050".
+        """
+        # Numeric token: digits with optional comma grouping (any width, so
+        # both '500,000' and lakh-style '5,00,000' are matched) and an
+        # optional decimal portion.
+        number_token = r'\d+(?:,\d+)*(?:\.\d+)?'
+
+        currency_patterns = [
+            r'rs\.?\s*(' + number_token + r')',
+            r'pkr\s*(' + number_token + r')',
+            r'(' + number_token + r')\s*rs\.?\b',
+            r'(' + number_token + r')\s*rupees',
         ]
-        
-        for pattern in patterns:
+
+        for pattern in currency_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 amount_str = match.group(1).replace(',', '')
                 return int(float(amount_str))
-        return None
+
+        # No explicit currency marker - fall back to bare numbers, but avoid
+        # picking up incidental/contextual numbers (EC-1).
+        bare_matches = re.findall(r'\b(' + number_token + r')\b', text)
+        if not bare_matches:
+            return None
+
+        values = [int(float(m.replace(',', ''))) for m in bare_matches]
+        return max(values)
     
     def extract_recipient_name(self, text: str) -> Optional[str]:
-        """Extract recipient name from text"""
+        """
+        Extract recipient name from text.
+
+        EC-8: the excluded-words list is broadened to cover common
+        English + Roman-Urdu imperative slang verbs (including multi-word
+        phrases like "bhej do") so they don't get captured as part of the
+        name.
+        EC-9: the final candidate is sanity-checked - it must be non-empty,
+        contain at least one alphabetic character, and not be composed
+        entirely of digits/special characters. If it fails, return None so
+        the caller can flag it as unparsed instead of silently corrupting it.
+        """
         text = text.strip()
-        
-        # Remove common words
-        excluded = ['to', 'send', 'transfer', 'bhejo', 'karo', 'ko']
-        name_words = [w for w in text.split() if w.lower() not in excluded]
-        
+        if not text:
+            return None
+
+        excluded = [
+            'to', 'send', 'transfer', 'pay', 'bhejo', 'karo', 'ko', 'bhej',
+            'bhejdo', 'bhej do', 'bhejna', 'kardo'
+        ]
+
+        # Strip multi-word excluded phrases first (longest first) using
+        # word-boundary anchored regex.
+        working_text = text
+        multi_word = sorted([p for p in excluded if ' ' in p], key=len, reverse=True)
+        for phrase in multi_word:
+            working_text = re.sub(
+                r'\b' + re.escape(phrase) + r'\b', '', working_text, flags=re.IGNORECASE
+            )
+
+        single_word_excluded = {p.lower() for p in excluded if ' ' not in p}
+        name_words = [w for w in working_text.split() if w.lower() not in single_word_excluded]
+
         if name_words:
-            return ' '.join(w.capitalize() for w in name_words)
-        
-        # If nothing left, just capitalize what user entered
-        return text.strip().title() if text else None
+            candidate = ' '.join(w.capitalize() for w in name_words)
+        else:
+            candidate = working_text.strip().title() if working_text.strip() else None
+
+        if not candidate:
+            return None
+
+        # Sanity checks (EC-9)
+        stripped_candidate = candidate.replace(' ', '')
+        if not stripped_candidate:
+            return None
+        if not any(c.isalpha() for c in stripped_candidate):
+            return None
+
+        return candidate
     
     def validate_account_number(self, text: str) -> Optional[str]:
         """Validate account number - must be mix of letters and numbers"""
-        text = text.strip().upper().replace(' ', '')
-        
-        # Remove common words
-        excluded = ['ACCOUNT', 'NUMBER', 'ACC', 'NO']
-        for word in excluded:
-            text = text.replace(word, '')
-        
-        text = text.strip()
+        text = text.strip().upper()
+
+        # EC-7: use word-boundary anchored regex instead of destructive
+        # substring .replace() so identifiers like "NOOR123456" never get
+        # mangled into "OOR123456" by an incidental "NO" match.
+        text = re.sub(r'\b(ACCOUNT|NUMBER|ACC|NO)\b', '', text)
+        text = text.replace(' ', '').strip()
         
         # Must be between 6-20 characters
         if not (6 <= len(text) <= 20):
@@ -369,15 +469,38 @@ class BankAIConversation:
         return None
     
     def extract_redemption_choice(self, text: str) -> Optional[int]:
-        """Extract redemption choice from text"""
+        """
+        Extract redemption choice from text.
+
+        EC-6: the original implementation used `'1' in text` / `'2' in text`,
+        which matches the digit even when it's embedded inside a larger
+        number (e.g. "1500 points" contains the substring '1' and '5'...
+        and would wrongly map to Option 1). Standalone option numbers are
+        now matched with negative lookaround so they can't match inside a
+        longer digit run, and explicit reward values / ordinal words are
+        checked first since they're unambiguous.
+        """
         text_lower = text.lower()
-        
-        # Check for option numbers
-        if '1' in text or 'first' in text_lower or '500' in text:
+
+        # Explicit reward values are unambiguous - check first.
+        if re.search(r'\b500\b', text_lower):
             return 500
-        elif '2' in text or 'second' in text_lower or '250' in text:
+        if re.search(r'\b250\b', text_lower):
             return 250
-        
+
+        # Ordinal words
+        if re.search(r'\bsecond\b', text_lower):
+            return 250
+        if re.search(r'\bfirst\b', text_lower):
+            return 500
+
+        # Bare option numbers - only match a standalone '1' or '2', never a
+        # digit embedded inside a larger number like "1500".
+        if re.search(r'(?<!\d)2(?!\d)', text_lower):
+            return 250
+        if re.search(r'(?<!\d)1(?!\d)', text_lower):
+            return 500
+
         return None
     
     def detect_intent(self, text: str) -> str:
@@ -405,6 +528,11 @@ class BankAIConversation:
         
         # Handle emergency password flow with retry tracking
         if conversation_context.get('awaiting_emergency_password'):
+            # SEC-1 / EC-12: never echo the raw password text back out via
+            # normalized_text. entities['password'] is deliberately kept
+            # intact (not scrubbed) because app.py's emergency-unlock flow
+            # depends on the real value for check_password_hash(); redacting
+            # it here would silently break authentication.
             return {
                 'intent': 'emergency_password_provided',
                 'language': language,
@@ -413,7 +541,7 @@ class BankAIConversation:
                 'clarification_type': None,
                 'requires_human': False,
                 'handoff_reason': None,
-                'normalized_text': user_message,
+                'normalized_text': "[REDACTED]",
                 'ai_response': None,
                 'original_intent': 'emergency',
                 'emergency_attempts': conversation_context.get('emergency_attempts', 3)
@@ -422,6 +550,9 @@ class BankAIConversation:
         # Handle password flow for transactions
         if conversation_context.get('awaiting_password'):
             original_intent = conversation_context.get('original_intent')
+            # SEC-1 / EC-12: same rationale as above - normalized_text is
+            # redacted, entities['password'] is preserved for downstream
+            # check_password_hash() verification.
             return {
                 'intent': 'password_provided',
                 'language': language,
@@ -433,7 +564,7 @@ class BankAIConversation:
                 'clarification_type': None,
                 'requires_human': False,
                 'handoff_reason': None,
-                'normalized_text': user_message,
+                'normalized_text': "[REDACTED]",
                 'ai_response': None,
                 'original_intent': original_intent
             }
@@ -551,6 +682,40 @@ class BankAIConversation:
                         'account_number': account_number
                     }
                 }
+
+            # EC-4/EC-5 fix: amount, recipient AND account_number are all
+            # already filled (e.g. a re-prompt/back-button state replay).
+            # Do not fall through into fresh self.detect_intent() - that was
+            # misclassifying password strings/replayed text as new top-level
+            # intents. Re-issue the password prompt and stay in this flow.
+            else:
+                amount = conversation_context['amount']
+                recipient = conversation_context['recipient']
+                account_number = conversation_context['account_number']
+                return {
+                    'intent': 'transfer_money',
+                    'language': language,
+                    'entities': {
+                        'amount': amount,
+                        'recipient': recipient,
+                        'account_number': account_number
+                    },
+                    'needs_clarification': True,
+                    'clarification_type': 'password_required',
+                    'requires_human': False,
+                    'handoff_reason': None,
+                    'normalized_text': "[REDACTED]",
+                    'ai_response': self.responses['transfer_password_request'][language].format(
+                        amount=amount, recipient=recipient
+                    ),
+                    'awaiting_password': True,
+                    'original_intent': 'transfer_money',
+                    'pending_entities': {
+                        'amount': amount,
+                        'recipient': recipient,
+                        'account_number': account_number
+                    }
+                }
         
         # PAY BILL FLOW
         elif current_flow == 'pay_bill':
@@ -616,10 +781,15 @@ class BankAIConversation:
             elif not conversation_context.get('amount'):
                 amount = self.extract_amount(user_message)
                 if not amount:
-                    # Try to parse it as just a number
+                    # EC-3 fix: the old code did
+                    #   int(re.sub(r'[^\d]', '', user_message))
+                    # which turns "100.50" into "10050". Extract a numeric
+                    # token directly instead, preserving the decimal point,
+                    # and only then convert via float() before truncating.
                     try:
-                        amount = int(re.sub(r'[^\d]', '', user_message))
-                    except:
+                        num_match = re.search(r'\d+(?:\.\d+)?', user_message)
+                        amount = int(float(num_match.group())) if num_match else None
+                    except (ValueError, AttributeError):
                         amount = None
                 
                 if amount:
@@ -667,6 +837,38 @@ class BankAIConversation:
                         'bill_type': conversation_context['bill_type'],
                         'bill_reference': conversation_context['bill_reference']
                     }
+
+            # EC-4/EC-5 fix: bill_type, bill_reference AND amount are all
+            # already filled (state replay). Re-issue the password prompt
+            # instead of dropping through to fresh intent detection.
+            else:
+                bill_type = conversation_context['bill_type']
+                bill_reference = conversation_context['bill_reference']
+                amount = conversation_context['amount']
+                return {
+                    'intent': 'pay_bill',
+                    'language': language,
+                    'entities': {
+                        'bill_type': bill_type,
+                        'account_number': bill_reference,
+                        'amount': amount
+                    },
+                    'needs_clarification': True,
+                    'clarification_type': 'password_required',
+                    'requires_human': False,
+                    'handoff_reason': None,
+                    'normalized_text': "[REDACTED]",
+                    'ai_response': self.responses['bill_payment_password_request'][language].format(
+                        bill_type=bill_type, amount=amount
+                    ),
+                    'awaiting_password': True,
+                    'original_intent': 'pay_bill',
+                    'pending_entities': {
+                        'bill_type': bill_type,
+                        'account_number': bill_reference,
+                        'amount': amount
+                    }
+                }
         
         # REDEEM POINTS FLOW
         elif current_flow == 'redeem_points':
@@ -687,6 +889,42 @@ class BankAIConversation:
                         'original_intent': 'redeem_points',
                         'pending_entities': {'redemption_choice': choice}
                     }
+                else:
+                    # EC-4/EC-5 fix: extract_redemption_choice returned None
+                    # (e.g. "what are my options?" or garbled input). Do not
+                    # drop through to fresh intent detection - re-prompt the
+                    # user with the choices while preserving the active flow.
+                    return {
+                        'intent': 'redeem_points',
+                        'language': language,
+                        'entities': {},
+                        'needs_clarification': True,
+                        'clarification_type': 'redemption_choice_missing',
+                        'requires_human': False,
+                        'handoff_reason': None,
+                        'normalized_text': self.normalize_slang(user_message),
+                        'ai_response': self.responses['clarify_redemption_option'][language],
+                        'current_flow': 'redeem_points'
+                    }
+            else:
+                # EC-4/EC-5 fix: redemption_choice already filled (state
+                # replay) - re-issue the password prompt instead of falling
+                # through to fresh intent detection.
+                choice = conversation_context['redemption_choice']
+                return {
+                    'intent': 'redeem_points',
+                    'language': language,
+                    'entities': {'redemption_choice': choice},
+                    'needs_clarification': True,
+                    'clarification_type': 'password_required',
+                    'requires_human': False,
+                    'handoff_reason': None,
+                    'normalized_text': "[REDACTED]",
+                    'ai_response': self.responses['redeem_password_request'][language],
+                    'awaiting_password': True,
+                    'original_intent': 'redeem_points',
+                    'pending_entities': {'redemption_choice': choice}
+                }
         
         # Detect new intent
         intent = self.detect_intent(user_message)
@@ -726,7 +964,61 @@ class BankAIConversation:
             amount = self.extract_amount(user_message)
             
             if amount:
-                # Has amount, ask for recipient name
+                # EC-1/EC-8: also try to pull the recipient out of this same
+                # message (e.g. "Ahmed ko 300 bhejdo") instead of only ever
+                # extracting the amount on the first turn and re-asking for
+                # a name the user already gave. Strip the matched amount
+                # substring out first so digits don't leak into the
+                # extracted name (extract_recipient_name has no concept of
+                # "this token is the amount, ignore it").
+                # Strip the matched amount AND any adjacent currency marker
+                # (not just the bare digit string) so a leftover "Rs"/"PKR"
+                # token doesn't get stuck to the extracted name, e.g.
+                # "send RS 5000 to Ahmed" must not yield "Rs Ahmed".
+                amount_strip_pattern = (
+                    r'(rs\.?\s*|pkr\s*)?'
+                    r'\d+(?:,\d+)*(?:\.\d+)?'
+                    r'(\s*rs\.?\b|\s*rupees\b)?'
+                )
+                text_without_amount = re.sub(
+                    amount_strip_pattern, '', user_message, count=1, flags=re.IGNORECASE
+                )
+                recipient = self.extract_recipient_name(text_without_amount)
+
+                # extract_recipient_name is built for replies that are
+                # already known to be name-only (e.g. the step-2 in-flow
+                # case), so when nothing recognizable is left it falls back
+                # to title-casing whatever remains - including transfer
+                # verbs/currency words like "send", "transfer", "pay", "rs"
+                # that aren't in its excluded list. Reject those so a
+                # bare "send 5000" doesn't get misread as a recipient
+                # named "Send".
+                leftover_keywords = {
+                    'send', 'transfer', 'pay', 'rs', 'pkr', 'rupees',
+                    'rupee', 'money', 'payment', 'paisa'
+                }
+                if recipient and recipient.lower() in leftover_keywords:
+                    recipient = None
+
+                if recipient:
+                    # Got both slots in one turn - skip straight to asking
+                    # for the account number.
+                    return {
+                        'intent': 'transfer_money',
+                        'language': language,
+                        'entities': {'amount': amount, 'recipient': recipient},
+                        'needs_clarification': True,
+                        'clarification_type': 'account_number_missing',
+                        'requires_human': False,
+                        'handoff_reason': None,
+                        'normalized_text': self.normalize_slang(user_message),
+                        'ai_response': self.responses['transfer_ask_account'][language].format(recipient=recipient),
+                        'current_flow': 'transfer_money',
+                        'amount': amount,
+                        'recipient': recipient
+                    }
+
+                # Has amount only, ask for recipient name
                 return {
                     'intent': 'transfer_money',
                     'language': language,
