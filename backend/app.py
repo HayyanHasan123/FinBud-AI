@@ -12,7 +12,7 @@ from features import (
     init_db, log_late_payment, get_points, add_points, redeem_points,
     add_bill, mark_paid, list_pending, generate_reminders, get_inbox,
     detect_anomalies, create_ticket, queue_list, claim, resolve, cancel,
-    status, trigger_emergency
+    status, trigger_emergency, has_registered_card, list_cards
 )
 
 from nlp_module import BankAIConversation
@@ -825,6 +825,55 @@ def transaction_history():
     except Exception as e:
         print(f"Transaction history error: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 500
+    
+@app.route('/api/transaction/<int:transaction_id>/receipt', methods=['GET'])
+def transaction_receipt(transaction_id):
+    """
+    Returns full details for a single transaction so the frontend's
+    3-dot menu can render/download a receipt for that specific row.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        account_number = session['account_number']
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, account_number, transaction_type, description, amount,
+                   recipient, biller, bill_id, status, created_at
+            FROM dashboard_transactions
+            WHERE id=? AND account_number=?
+        """, (transaction_id, account_number))
+
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({'success': False, 'message': 'Transaction not found'}), 404
+
+        date_obj = datetime.fromisoformat(row['created_at'])
+
+        receipt = {
+            'transaction_id': row['id'],
+            'account_number': row['account_number'],
+            'transaction_type': row['transaction_type'],
+            'description': row['description'],
+            'amount': row['amount'],
+            'recipient': row['recipient'],
+            'biller': row['biller'],
+            'bill_id': row['bill_id'],
+            'status': row['status'],
+            'date': date_obj.strftime('%b %d, %Y'),
+            'time': date_obj.strftime('%I:%M %p'),
+            'created_at': row['created_at']
+        }
+
+        return jsonify({'success': True, 'receipt': receipt})
+
+    except Exception as e:
+        print(f"Transaction receipt error: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/financial/spending-category', methods=['GET'])
 def spending_by_category():
@@ -973,6 +1022,32 @@ def api_emergency_trigger():
     result = trigger_emergency(acc, real_password, entered_password)
     return jsonify(result)
 
+@app.route('/api/cards/check', methods=['GET'])
+def api_cards_check():
+    """
+    Tells the frontend whether the logged-in user has at least one card
+    on file, so the Emergency button can be shown/hidden accordingly.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    account_number = session['account_number']
+    has_card = has_registered_card(account_number)
+    return jsonify({'success': True, 'account': account_number, 'has_card': has_card})
+
+
+@app.route('/api/cards/list', methods=['GET'])
+def api_cards_list():
+    """
+    Returns the (masked) list of cards on file for the logged-in user,
+    e.g. for rendering them in the Emergency / card-management UI.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    account_number = session['account_number']
+    cards = list_cards(account_number)
+    return jsonify({'success': True, 'account': account_number, 'cards': cards})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

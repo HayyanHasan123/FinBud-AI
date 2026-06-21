@@ -394,3 +394,30 @@ def trigger_emergency(account, password, entered_password):
     alert_fraud_team(account, "Emergency mode triggered by user.")
     guide = safety_guide()
     return {"success": True, "steps": guide}
+
+# ---------- CARDS SERVICE (Emergency Feature) ----------
+def has_registered_card(account):
+    """
+    Checks whether the given account has at least one card on file.
+    Used to conditionally show/hide the Emergency button on the frontend.
+    """
+    conn = _conn(); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM cards WHERE account_number=?", (account,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
+
+
+def list_cards(account):
+    """
+    Returns all cards registered to an account (id, masked card number, status).
+    Card numbers are masked here so raw PANs never leave the backend unnecessarily.
+    """
+    conn = _conn(); c = conn.cursor()
+    c.execute("SELECT id, card_number, status FROM cards WHERE account_number=?", (account,))
+    rows = c.fetchall(); conn.close()
+    out = []
+    for card_id, card_number, status in rows:
+        masked = f"**** **** **** {card_number[-4:]}" if card_number and len(card_number) >= 4 else "****"
+        out.append({"card_id": card_id, "card_number_masked": masked, "status": status})
+    return out
