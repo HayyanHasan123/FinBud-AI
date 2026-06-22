@@ -279,6 +279,7 @@
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-wrap: wrap;
         }
 
         .currency {
@@ -317,6 +318,22 @@
             background: var(--secondary-purple);
         }
 
+        .topup-btn {
+            background: var(--primary-purple);
+            color: var(--text-light);
+            border: none;
+            padding: 8px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 13px;
+            transition: opacity 0.15s;
+        }
+        .topup-btn:hover {
+            opacity: 0.9;
+        }
+
         .quick-actions-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -347,6 +364,18 @@
             transform: translateY(0);
             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
             opacity: 1;
+        }
+
+        .action-btn.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .action-btn.danger {
+            background: var(--danger);
+        }
+
+        .action-btn.hidden-action {
+            display: none;
         }
 
         .column-right {
@@ -406,7 +435,7 @@
             border-collapse: collapse;
             background: none;
             border-radius: 0;
-            overflow: hidden;
+            overflow: visible;
             margin-top: 15px;
             color: var(--text-dark);
         }
@@ -429,9 +458,79 @@
             font-weight: 600;
         }
 
+        /* Right-align amount column (header + cells) */
+        .tx-table th:nth-child(3),
+        .tx-table td:nth-child(3) {
+            text-align: right;
+        }
+
+        .tx-table th:nth-child(4),
+        .tx-table td:nth-child(4) {
+            text-align: right;
+            width: 36px;
+        }
+
         .income-text { color: var(--income); }
         .expense-text { color: var(--expense); }
         .neutral-text { color: var(--text-dark); }
+
+        /* 3-dot row menu */
+        .tx-menu-wrap {
+            position: relative;
+            display: inline-block;
+        }
+
+        .tx-menu-btn {
+            background: none;
+            border: none;
+            color: var(--primary-purple);
+            font-size: 18px;
+            font-weight: 900;
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 6px;
+            line-height: 1;
+        }
+
+        .tx-menu-btn:hover {
+            background: var(--secondary-purple);
+        }
+
+        .tx-menu-btn:disabled {
+            color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .tx-menu-dropdown {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 28px;
+            background: var(--card);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            border-radius: 8px;
+            min-width: 170px;
+            z-index: 50;
+            overflow: hidden;
+        }
+
+        .tx-menu-dropdown.open {
+            display: block;
+        }
+
+        .tx-menu-dropdown a {
+            display: block;
+            padding: 10px 14px;
+            font-size: 13px;
+            color: var(--text-dark);
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .tx-menu-dropdown a:hover {
+            background: var(--secondary-purple);
+            color: var(--primary-purple);
+        }
 
         /* Reminders Card */
         .reminders-card {
@@ -447,6 +546,54 @@
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+
+        /* Spending Breakdown card */
+        .breakdown-card {
+            background: var(--card);
+            padding: 20px 30px;
+        }
+
+        .breakdown-row {
+            margin-bottom: 14px;
+        }
+
+        .breakdown-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .breakdown-label-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: var(--text-dark);
+        }
+
+        .breakdown-label-row strong {
+            color: var(--primary-purple);
+        }
+
+        .breakdown-bar-track {
+            width: 100%;
+            height: 8px;
+            background: var(--secondary-purple);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .breakdown-bar-fill {
+            height: 100%;
+            background: var(--primary-purple);
+            border-radius: 4px;
+            transition: width 0.4s ease;
+        }
+
+        .breakdown-empty {
+            text-align: center;
+            color: #999;
+            padding: 10px 0;
+            font-size: 13px;
         }
 
         .modal {
@@ -478,7 +625,7 @@
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
             transform: scale(0.95);
             transition: transform 0.3s ease;
-            max-height: 80vh;
+            max-height: 85vh;
             overflow-y: auto;
         }
         .modal.visible .modal-content {
@@ -513,6 +660,8 @@
             margin-top: 5px;
             border: 1px solid rgba(92, 45, 145, 0.3);
             border-radius: 6px;
+            font-size: 14px;
+            background: white;
         }
 
         .modal-content p.error-message {
@@ -537,10 +686,137 @@
         .modal-content button.primary:hover {
             background: #4a2475;
         }
+
+        .modal-content button.secondary {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            background: transparent;
+            color: var(--primary-purple);
+            border: 2px solid var(--primary-purple);
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 700;
+            transition: background 0.2s;
+        }
+        .modal-content button.secondary:hover {
+            background: var(--secondary-purple);
+        }
+
         .modal-content .muted {
             font-size: 12px;
             color: #777;
             margin-top: 10px;
+        }
+
+        /* Step indicator for Send Money flow */
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0 20px 0;
+        }
+
+        .step-dot {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: var(--secondary-purple);
+            color: var(--primary-purple);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .step-dot.done {
+            background: var(--income);
+            color: white;
+        }
+
+        .step-dot.current {
+            background: var(--primary-purple);
+            color: white;
+        }
+
+        .step-line {
+            flex-grow: 1;
+            height: 2px;
+            background: var(--secondary-purple);
+        }
+
+        .limit-note {
+            background: var(--secondary-purple);
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--primary-purple);
+            margin-top: 16px;
+        }
+
+        .summary-box {
+            background: var(--secondary-purple);
+            padding: 16px;
+            border-radius: 8px;
+            margin: 16px 0;
+        }
+
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            padding: 4px 0;
+        }
+
+        .summary-row strong {
+            color: var(--primary-purple);
+        }
+
+        .saved-account-prompt {
+            background: rgba(92, 45, 145, 0.08);
+            border: 1px solid rgba(92, 45, 145, 0.25);
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-top: 14px;
+            font-size: 13px;
+        }
+
+        .saved-account-prompt .prompt-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .saved-account-prompt button {
+            flex: 1;
+            padding: 8px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .saved-account-prompt .yes-btn {
+            background: var(--primary-purple);
+            color: white;
+        }
+
+        .saved-account-prompt .no-btn {
+            background: white;
+            color: var(--primary-purple);
+            border: 1px solid var(--primary-purple);
+        }
+
+        .receipt-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .receipt-actions button {
+            flex: 1;
         }
 
         .sidebar {
@@ -589,6 +865,69 @@
             color: #777;
             word-break: break-all;
             text-align: center;
+        }
+
+        .profile-switcher {
+            width: 100%;
+            margin-top: 16px;
+        }
+
+        .profile-switch-toggle {
+            width: 100%;
+            background: var(--secondary-purple);
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--primary-purple);
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .profile-switch-list {
+            display: none;
+            margin-top: 8px;
+            border: 1px solid var(--secondary-purple);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .profile-switch-list.open {
+            display: block;
+        }
+
+        .profile-switch-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            font-size: 13px;
+            border-bottom: 1px solid var(--secondary-purple);
+            cursor: pointer;
+        }
+
+        .profile-switch-item:last-child {
+            border-bottom: none;
+        }
+
+        .profile-switch-item:hover {
+            background: var(--secondary-purple);
+        }
+
+        .profile-switch-item .badge {
+            font-size: 10px;
+            font-weight: 700;
+            background: var(--income);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            text-transform: uppercase;
+        }
+
+        .profile-switch-item.add-profile {
+            color: var(--primary-purple);
+            font-weight: 600;
         }
 
         .sidebar-nav {
@@ -675,6 +1014,46 @@
             display: block;
         }
 
+        /* Printable receipt (hidden on screen, shown only when printing) */
+        .receipt-print {
+            display: none;
+        }
+
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            .receipt-print, .receipt-print * {
+                visibility: visible;
+            }
+            .receipt-print {
+                display: block !important;
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                padding: 30px;
+            }
+        }
+
+        .receipt-print .r-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .receipt-print .r-header h2 {
+            color: #5c2d91;
+            margin: 0;
+        }
+
+        .receipt-print .r-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+
         @media(max-width:900px){
             .topbar{padding:15px 20px;}
             .dashboard-grid{grid-template-columns:1fr; padding:20px;}
@@ -734,6 +1113,7 @@
                         <span class="currency">PKR</span>
                         <strong id="balanceDisplay" class="masked-balance">*****</strong>
                         <button class="sign-up-btn" id="balanceToggleBtn">SHOW BALANCE</button>
+                        <button class="topup-btn" id="topUpBtn">+ Top Up</button>
                     </div>
                 </div>
 
@@ -742,6 +1122,14 @@
                     <button class="action-btn" data-action="pay-bill">PAY BILL</button>
                     <button class="action-btn" data-action="rewards">REWARDS</button>
                     <button class="action-btn" data-action="redeem-points">REDEEM POINTS</button>
+                    <button class="action-btn danger full-width hidden-action" data-action="emergency-lock" id="emergencyActionBtn">🚨 EMERGENCY — LOCK CARDS</button>
+                </div>
+
+                <div class="card breakdown-card">
+                    <h3 class="card-title">Spending Breakdown</h3>
+                    <div id="breakdownContainer">
+                        <p class="breakdown-empty">Loading spending data...</p>
+                    </div>
                 </div>
             </section>
 
@@ -756,10 +1144,10 @@
                     <h3 class="card-title">Recent Transactions <span class="arrow-down"><i class="fas fa-chevron-down"></i></span></h3>
                     <table id="txTable" class="tx-table">
                         <thead>
-                            <tr><th>Date</th><th>Type</th><th>Amount</th></tr>
+                            <tr><th>Date</th><th>Type</th><th>Amount</th><th></th></tr>
                         </thead>
                         <tbody id="txTableBody">
-                            <tr><td colspan="3" style="text-align: center; color: #999;">Loading...</td></tr>
+                            <tr><td colspan="4" style="text-align: center; color: #999;">Loading...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -776,6 +1164,19 @@
             <div class="profile-avatar" id="sidebarAvatar">--</div>
             <span class="profile-name-large" id="sidebarUserName">User</span>
             <span class="user-id">User ID: <span id="sidebarUserId">Loading...</span></span>
+
+            <div class="profile-switcher">
+                <button class="profile-switch-toggle" id="profileSwitchToggle">Switch Profile <i class="fas fa-chevron-down"></i></button>
+                <div class="profile-switch-list" id="profileSwitchList">
+                    <div class="profile-switch-item">
+                        <span id="profileSwitchActiveName">This Account</span>
+                        <span class="badge">Active</span>
+                    </div>
+                    <div class="profile-switch-item add-profile" onclick="showAddProfileInfo()">
+                        <span>+ Add Family / Business Profile</span>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <ul class="sidebar-nav">
@@ -797,6 +1198,9 @@
         </div>
     </div>
 
+    <!-- Hidden printable receipt, populated dynamically -->
+    <div id="printableReceipt" class="receipt-print"></div>
+
     <script>
         let userData = {
             name: "User",
@@ -807,6 +1211,24 @@
             points: 0,
             email: ""
         };
+
+        // Demo daily transfer limit. There is no backend-enforced limit yet —
+        // this is a frontend display approximation. Hayyan's task list already
+        // covers real enforcement at /api/transaction/create.
+        const DAILY_TRANSFER_LIMIT = 200000;
+
+        const BILL_PROVIDERS = {
+            "Electricity": ["K-Electric", "LESCO", "MEPCO", "HESCO"],
+            "Internet": ["PTCL", "Stormfiber", "Transworld", "Nayatel"],
+            "Gas": ["SSGC", "SNGPL"],
+            "Water": ["Water Board"]
+        };
+
+        // Holds details collected in Send Money Step 1 until PIN/password confirms it
+        let pendingTransfer = null;
+
+        // Holds details collected in Pay Bill Step 1 until password confirms it
+        let pendingBillPayment = null;
 
         // Load user data from backend
         async function loadUserData() {
@@ -836,11 +1258,28 @@
                 updateBalanceUI();
                 loadTransactionHistory();
                 loadReminders();
+                loadSpendingBreakdown();
+                checkCardsAndToggleEmergency();
                 
             } catch (error) {
                 console.error('Error loading user data:', error);
                 alert('Please log in to access the dashboard.');
                 window.location.href = "/";
+            }
+        }
+
+        // Show/hide the Emergency quick action depending on whether the user has a card on file
+        async function checkCardsAndToggleEmergency() {
+            const btn = document.getElementById('emergencyActionBtn');
+            try {
+                const response = await fetch('/api/cards/check', { credentials: 'include' });
+                if (!response.ok) throw new Error('cards check failed');
+                const data = await response.json();
+                btn.classList.toggle('hidden-action', !data.has_card);
+            } catch (error) {
+                console.error('Card check error:', error);
+                // Fail safe: hide the button if we can't confirm a card exists
+                btn.classList.add('hidden-action');
             }
         }
 
@@ -890,6 +1329,8 @@
         }
 
         // Load transaction history
+        let lastLoadedTransactions = [];
+
         async function loadTransactionHistory() {
             try {
                 const response = await fetch('/api/transaction/history?limit=4', {
@@ -900,23 +1341,189 @@
                     const data = await response.json();
                     const tbody = document.getElementById('txTableBody');
                     tbody.innerHTML = '';
+                    lastLoadedTransactions = data.transactions || [];
                     
-                    if (data.transactions && data.transactions.length > 0) {
-                        data.transactions.forEach(tx => {
+                    if (lastLoadedTransactions.length > 0) {
+                        lastLoadedTransactions.forEach((tx, index) => {
                             const row = tbody.insertRow();
                             const amountClass = tx.amount < 0 ? 'expense-text' : 'income-text';
+                            const hasId = (typeof tx.id !== 'undefined' && tx.id !== null);
+                            const menuId = hasId ? tx.id : `idx-${index}`;
+
                             row.innerHTML = `
                                 <td>${tx.date}</td>
                                 <td>${tx.description}</td>
                                 <td class="${amountClass}">PKR${Math.abs(tx.amount).toLocaleString('en-PK')}</td>
+                                <td class="tx-actions">
+                                    <div class="tx-menu-wrap">
+                                        <button class="tx-menu-btn" type="button" onclick="toggleTxMenu(event, '${menuId}')">⋯</button>
+                                        <div class="tx-menu-dropdown" id="txMenu-${menuId}">
+                                            <a href="#" onclick="downloadReceipt(event, ${hasId ? tx.id : 'null'})">Download Receipt</a>
+                                        </div>
+                                    </div>
+                                </td>
                             `;
                         });
                     } else {
-                        tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #999;">No transactions yet</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #999;">No transactions yet</td></tr>';
                     }
                 }
             } catch (error) {
                 console.error('Error loading transactions:', error);
+            }
+        }
+
+        // Close any open 3-dot menu when clicking elsewhere
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.tx-menu-dropdown.open').forEach(el => el.classList.remove('open'));
+        });
+
+        function toggleTxMenu(event, id) {
+            event.stopPropagation();
+            const menu = document.getElementById(`txMenu-${id}`);
+            const isOpen = menu.classList.contains('open');
+            document.querySelectorAll('.tx-menu-dropdown.open').forEach(el => el.classList.remove('open'));
+            if (!isOpen) menu.classList.add('open');
+        }
+
+        // Download / print a receipt for a specific transaction.
+        // NOTE: requires the backend's /api/transaction/history response to include
+        // each transaction's "id" field — it currently doesn't (only type, description,
+        // amount, created_at are selected). Until that one field is added server-side,
+        // this falls back to a friendly inline message instead of crashing.
+        async function downloadReceipt(event, transactionId) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (!transactionId) {
+                showAlert('Receipt Unavailable', 'This transaction is missing an ID from the backend response. Ask the backend owner to include "id" in the /api/transaction/history SELECT statement.', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/transaction/${transactionId}/receipt`, { credentials: 'include' });
+                const data = await response.json();
+
+                if (!response.ok || !data.success) {
+                    showAlert('Receipt Unavailable', data.message || 'Could not load this receipt.', 'error');
+                    return;
+                }
+
+                renderPrintableReceipt(data.receipt);
+                window.print();
+
+            } catch (error) {
+                console.error('Receipt error:', error);
+                showAlert('Server Error', 'Unable to fetch receipt right now.', 'error');
+            }
+        }
+
+        function renderPrintableReceipt(receipt) {
+            const container = document.getElementById('printableReceipt');
+            const amountAbs = Math.abs(receipt.amount).toLocaleString('en-PK');
+
+            container.innerHTML = `
+                <div class="r-header">
+                    <h2>FinBud AI — Transaction Receipt</h2>
+                    <p>${receipt.date} • ${receipt.time}</p>
+                </div>
+                <div class="r-row"><span>Transaction ID</span><strong>#${receipt.transaction_id}</strong></div>
+                <div class="r-row"><span>Account</span><strong>${receipt.account_number}</strong></div>
+                <div class="r-row"><span>Type</span><strong>${receipt.transaction_type}</strong></div>
+                <div class="r-row"><span>Description</span><strong>${receipt.description}</strong></div>
+                ${receipt.recipient ? `<div class="r-row"><span>Recipient / Reference</span><strong>${receipt.recipient}</strong></div>` : ''}
+                ${receipt.biller ? `<div class="r-row"><span>Biller</span><strong>${receipt.biller}</strong></div>` : ''}
+                <div class="r-row"><span>Amount</span><strong>PKR ${amountAbs}</strong></div>
+                <div class="r-row"><span>Status</span><strong>${receipt.status}</strong></div>
+            `;
+        }
+
+        // Email receipt — backend route doesn't exist yet, handled gracefully.
+        async function emailReceipt(transactionId) {
+            try {
+                const response = await fetch(`/api/transaction/${transactionId}/email-receipt`, {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+
+                if (response.status === 404) {
+                    showAlert('Coming Soon', 'Email delivery for receipts is part of our Phase 2 rollout. You can download the PDF receipt for now.', 'info');
+                    return;
+                }
+
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Receipt Sent', 'A copy of your receipt has been emailed to your registered address.', 'success');
+                } else {
+                    showAlert('Could Not Send', data.message || 'Please try downloading the receipt instead.', 'error');
+                }
+            } catch (error) {
+                showAlert('Coming Soon', 'Email delivery for receipts is part of our Phase 2 rollout. You can download the PDF receipt for now.', 'info');
+            }
+        }
+
+        // Spending breakdown with percentages
+        async function loadSpendingBreakdown() {
+            const container = document.getElementById('breakdownContainer');
+            try {
+                const response = await fetch('/api/financial/spending-category', { credentials: 'include' });
+                if (!response.ok) throw new Error('failed');
+                const data = await response.json();
+                const categories = data.spending_by_category || {};
+                const entries = Object.entries(categories).sort((a, b) => b[1] - a[1]);
+
+                if (entries.length === 0) {
+                    container.innerHTML = '<p class="breakdown-empty">No spending yet — make a transfer or pay a bill to see your breakdown.</p>';
+                    return;
+                }
+
+                const total = entries.reduce((sum, [, amount]) => sum + amount, 0);
+
+                let html = '';
+                entries.slice(0, 5).forEach(([category, amount]) => {
+                    const pct = total > 0 ? ((amount / total) * 100) : 0;
+                    html += `
+                        <div class="breakdown-row">
+                            <div class="breakdown-label-row">
+                                <span>${category}</span>
+                                <strong>${pct.toFixed(1)}% · PKR ${amount.toLocaleString('en-PK', {maximumFractionDigits: 0})}</strong>
+                            </div>
+                            <div class="breakdown-bar-track">
+                                <div class="breakdown-bar-fill" style="width: ${pct.toFixed(1)}%;"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Breakdown error:', error);
+                container.innerHTML = '<p class="breakdown-empty">Unable to load spending breakdown.</p>';
+            }
+        }
+
+        // Estimate today's already-used transfer amount against the demo daily limit.
+        // Frontend-only approximation — see DAILY_TRANSFER_LIMIT note above.
+        async function getDailyLimitUsage() {
+            try {
+                const response = await fetch('/api/transaction/history?limit=50', { credentials: 'include' });
+                const data = await response.json();
+                const todayStr = new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+
+                let usedToday = 0;
+                (data.transactions || []).forEach(tx => {
+                    if (tx.date === todayStr && tx.amount < 0) {
+                        usedToday += Math.abs(tx.amount);
+                    }
+                });
+
+                return {
+                    used: usedToday,
+                    remaining: Math.max(DAILY_TRANSFER_LIMIT - usedToday, 0)
+                };
+            } catch (error) {
+                console.error('Daily limit calc error:', error);
+                return { used: 0, remaining: DAILY_TRANSFER_LIMIT };
             }
         }
 
@@ -943,7 +1550,11 @@
             sidebarUserId: document.getElementById('sidebarUserId'),
             bellIconToggle: document.getElementById('bellIconToggle'),
             remindersDropdown: document.getElementById('remindersDropdown'),
-            reminderBadge: document.getElementById('reminderBadge')
+            reminderBadge: document.getElementById('reminderBadge'),
+            topUpBtn: document.getElementById('topUpBtn'),
+            profileSwitchToggle: document.getElementById('profileSwitchToggle'),
+            profileSwitchList: document.getElementById('profileSwitchList'),
+            profileSwitchActiveName: document.getElementById('profileSwitchActiveName')
         };
 
         // Bell icon toggle for reminders
@@ -967,6 +1578,7 @@
             DOMElements.sidebarAvatar.textContent = userData.initials;
             DOMElements.sidebarUserName.textContent = userData.name;
             DOMElements.sidebarUserId.textContent = userData.userId;
+            DOMElements.profileSwitchActiveName.textContent = userData.name;
         }
 
         // Initialize on load
@@ -1049,16 +1661,30 @@
             DOMElements.sidebar.classList.remove('open');
             DOMElements.sidebarOverlay.classList.remove('visible');
             DOMElements.dashboardContainer.classList.remove('blurred-content');
+            DOMElements.profileSwitchList.classList.remove('open');
         }
 
         DOMElements.profileAreaToggle.addEventListener('click', openSidebar);
         DOMElements.closeSidebarBtn.addEventListener('click', closeSidebar);
         DOMElements.sidebarOverlay.addEventListener('click', closeSidebar);
 
+        // Multi-profile switcher — UI placeholder only. There is no backend
+        // modeling yet for multiple profiles under one login (would need a new
+        // linked-profiles table); this just demonstrates the intended UX.
+        DOMElements.profileSwitchToggle.addEventListener('click', () => {
+            DOMElements.profileSwitchList.classList.toggle('open');
+        });
+
+        window.showAddProfileInfo = function() {
+            showAlert('Coming Soon', 'Multi-profile support (family or business profiles under one FinBud login) is on our roadmap. This requires new backend account-linking work beyond the current prototype.', 'info');
+        };
+
         function closeModal() {
             DOMElements.modal.classList.remove('visible');
             DOMElements.dashboardContainer.classList.remove('blurred-content');
             DOMElements.modalBody.innerHTML = '';
+            pendingTransfer = null;
+            pendingBillPayment = null;
         }
 
         DOMElements.closeModal.addEventListener('click', closeModal);
@@ -1128,9 +1754,11 @@
             button.addEventListener('click', (e) => {
                 const action = e.currentTarget.dataset.action;
 
-                if (action === 'send-money' || action === 'pay-bill') {
-                    showPasswordPrompt(action);
+                if (action === 'emergency-lock') {
+                    // Reuse the existing secure, session-based emergency flow in chat.html
+                    window.location.href = "/chat?action=emergency";
                 } else {
+                    // Send Money & Pay Bill: password moves to the END of the flow now
                     showActionModal(action);
                 }
             });
@@ -1141,41 +1769,12 @@
 
             switch (action) {
                 case 'send-money':
-                    content = `
-                        <h3>Send Money</h3>
-                        <form onsubmit="handleTransaction(event, 'transfer')">
-                            <label for="recipient">Recipient Account/ID</label>
-                            <input type="text" id="recipient" placeholder="e.g., ABC923001234567" required>
-                            <label for="amount">Amount (PKR)</label>
-                            <input type="number" id="amount" step="0.01" min="1" placeholder="e.g., 5000" required>
-                            <label for="description">Description (Optional)</label>
-                            <input type="text" id="description" placeholder="e.g., Dinner share">
-                            <button type="submit" class="primary">CONFIRM TRANSFER</button>
-                            <p class="muted">A fee may apply for cross-bank transfers.</p>
-                        </form>
-                    `;
-                    break;
+                    renderSendMoneyStep1();
+                    return;
 
                 case 'pay-bill':
-                    content = `
-                        <h3>Pay Bill</h3>
-                        <form onsubmit="handleTransaction(event, 'bill')">
-                            <label for="biller">Select Biller</label>
-                            <select id="biller" required>
-                                <option value="">Select...</option>
-                                <option value="Electricity">Electricity</option>
-                                <option value="Gas">Gas</option>
-                                <option value="Internet">Internet</option>
-                                <option value="Water">Water</option>
-                            </select>
-                            <label for="billId">Bill Reference Number</label>
-                            <input type="text" id="billId" placeholder="Enter reference number" required>
-                            <label for="billAmount">Amount (PKR)</label>
-                            <input type="number" id="billAmount" step="0.01" min="10" placeholder="e.g., 6200" required>
-                            <button type="submit" class="primary">PROCESS PAYMENT</button>
-                        </form>
-                    `;
-                    break;
+                    renderPayBillStep1();
+                    return;
 
                 case 'rewards':
                     content = `
@@ -1212,29 +1811,400 @@
             showModal(content);
         }
 
-        window.handleTransaction = async function(event, type) {
-            event.preventDefault();
-            const form = event.target;
-            const amountInput = form.querySelector('#amount') || form.querySelector('#billAmount');
-            const amount = parseFloat(amountInput.value);
+        /* ===================== SEND MONEY: MULTI-STEP FLOW ===================== */
 
-            if (isNaN(amount) || amount <= 0) {
-                return showAlert('Error', 'Please enter a valid positive amount.', 'error');
+        function stepIndicatorHtml(current) {
+            return `
+                <div class="step-indicator">
+                    <div class="step-dot ${current === 1 ? 'current' : 'done'}">1</div>
+                    <div class="step-line"></div>
+                    <div class="step-dot ${current === 2 ? 'current' : (current > 2 ? 'done' : '')}">2</div>
+                    <div class="step-line"></div>
+                    <div class="step-dot ${current === 3 ? 'current' : ''}">3</div>
+                </div>
+            `;
+        }
+
+        async function renderSendMoneyStep1() {
+            const usage = await getDailyLimitUsage();
+
+            showModal(`
+                <h3>Send Money</h3>
+                ${stepIndicatorHtml(1)}
+                <form id="sendMoneyStep1Form">
+                    <label for="transferMethod">Transfer Method</label>
+                    <select id="transferMethod" required onchange="updateRecipientFieldLabel()">
+                        <option value="IBAN">IBAN</option>
+                        <option value="Account Number">Account Number</option>
+                        <option value="Raast ID">Raast ID</option>
+                    </select>
+
+                    <label for="recipientName">Recipient Name</label>
+                    <input type="text" id="recipientName" placeholder="e.g., Ahmed Khan" required>
+
+                    <label id="recipientIdLabel" for="recipientIdentifier">IBAN</label>
+                    <input type="text" id="recipientIdentifier" placeholder="e.g., PK36SCBL0000001123456702" required>
+
+                    <label for="amount">Amount (PKR)</label>
+                    <input type="number" id="amount" step="0.01" min="1" placeholder="e.g., 5000" required>
+
+                    <label for="purpose">Purpose</label>
+                    <select id="purpose" required>
+                        <option value="Rent">Rent</option>
+                        <option value="Salary">Salary</option>
+                        <option value="Business">Business</option>
+                        <option value="Personal">Personal</option>
+                        <option value="Other">Other</option>
+                    </select>
+
+                    <p class="error-message" id="sendMoneyStep1Error">Please check the details above.</p>
+
+                    <button type="submit" class="primary">CONTINUE</button>
+                </form>
+
+                <div class="limit-note">
+                    Remaining today: <strong>PKR ${usage.remaining.toLocaleString('en-PK')}</strong> of PKR ${DAILY_TRANSFER_LIMIT.toLocaleString('en-PK')} daily limit
+                </div>
+            `);
+
+            document.getElementById('sendMoneyStep1Form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const amount = parseFloat(document.getElementById('amount').value);
+                const errorMsg = document.getElementById('sendMoneyStep1Error');
+
+                if (isNaN(amount) || amount <= 0) {
+                    errorMsg.textContent = 'Please enter a valid positive amount.';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+
+                if (amount > usage.remaining) {
+                    errorMsg.textContent = `This exceeds your remaining daily limit of PKR ${usage.remaining.toLocaleString('en-PK')}.`;
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+
+                pendingTransfer = {
+                    method: document.getElementById('transferMethod').value,
+                    recipientName: document.getElementById('recipientName').value,
+                    recipientIdentifier: document.getElementById('recipientIdentifier').value,
+                    amount: amount,
+                    purpose: document.getElementById('purpose').value
+                };
+
+                renderSendMoneyStep2();
+            });
+        }
+
+        window.updateRecipientFieldLabel = function() {
+            const method = document.getElementById('transferMethod').value;
+            const label = document.getElementById('recipientIdLabel');
+            const input = document.getElementById('recipientIdentifier');
+
+            label.textContent = method;
+            if (method === 'IBAN') {
+                input.placeholder = 'e.g., PK36SCBL0000001123456702';
+            } else if (method === 'Account Number') {
+                input.placeholder = 'e.g., ABC923001234567';
+            } else {
+                input.placeholder = 'e.g., 03001234567';
             }
+        };
 
-            const transactionData = {
-                type: type,
-                amount: amount
-            };
+        function renderSendMoneyStep2() {
+            showModal(`
+                <h3>Confirm Transfer</h3>
+                ${stepIndicatorHtml(2)}
+                <div class="summary-box">
+                    <div class="summary-row"><span>Recipient</span><strong>${pendingTransfer.recipientName}</strong></div>
+                    <div class="summary-row"><span>${pendingTransfer.method}</span><strong>${pendingTransfer.recipientIdentifier}</strong></div>
+                    <div class="summary-row"><span>Amount</span><strong>PKR ${pendingTransfer.amount.toLocaleString('en-PK')}</strong></div>
+                    <div class="summary-row"><span>Purpose</span><strong>${pendingTransfer.purpose}</strong></div>
+                </div>
 
-            if (type === 'transfer') {
-                transactionData.recipient = form.querySelector('#recipient').value;
-                transactionData.description = form.querySelector('#description').value;
-            } else if (type === 'bill') {
-                transactionData.biller = form.querySelector('#biller').value;
-                transactionData.billId = form.querySelector('#billId').value;
+                <form id="sendMoneyStep2Form">
+                    <label for="confirmPassword">Enter your password to confirm</label>
+                    <input type="password" id="confirmPassword" placeholder="Password" required autofocus>
+                    <p class="error-message" id="sendMoneyStep2Error">Incorrect password. Please try again.</p>
+                    <button type="submit" class="primary">CONFIRM &amp; SEND</button>
+                    <button type="button" class="secondary" onclick="renderSendMoneyStep1()">BACK</button>
+                </form>
+                <p class="muted">Note: this confirms with your account password. A dedicated 4-digit PIN (separate from your login password) needs a small backend addition first.</p>
+            `);
+
+            document.getElementById('sendMoneyStep2Form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const password = document.getElementById('confirmPassword').value;
+                const errorMsg = document.getElementById('sendMoneyStep2Error');
+                const submitBtn = e.target.querySelector('button[type="submit"]');
+
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Processing...';
+
+                try {
+                    const verifyResp = await fetch('/api/user/verify-password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ password })
+                    });
+                    const verifyData = await verifyResp.json();
+
+                    if (!verifyData.success) {
+                        errorMsg.style.display = 'block';
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'CONFIRM & SEND';
+                        return;
+                    }
+
+                    const txResp = await fetch('/api/transaction/create', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            type: 'transfer',
+                            amount: pendingTransfer.amount,
+                            recipient: pendingTransfer.recipientName,
+                            recipient_account: pendingTransfer.recipientIdentifier,
+                            // Extra fields below aren't stored by the backend yet —
+                            // safe to send, harmlessly ignored until Hayyan adds columns for them.
+                            transfer_method: pendingTransfer.method,
+                            purpose: pendingTransfer.purpose
+                        })
+                    });
+                    const txData = await txResp.json();
+
+                    if (txData.success) {
+                        userData.balance = txData.new_balance;
+                        userData.points = txData.new_points;
+                        updateBalanceUI();
+                        renderSendMoneyStep3Success(txData);
+                        loadTransactionHistory();
+                        loadSpendingBreakdown();
+                    } else {
+                        errorMsg.textContent = txData.message || 'Transaction failed. Please try again.';
+                        errorMsg.style.display = 'block';
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'CONFIRM & SEND';
+                    }
+                } catch (error) {
+                    console.error('Transfer error:', error);
+                    errorMsg.textContent = 'Server error. Please try again.';
+                    errorMsg.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'CONFIRM & SEND';
+                }
+            });
+        }
+
+        function renderSendMoneyStep3Success(txData) {
+            const txId = txData.transaction_id;
+
+            showModal(`
+                <div style="text-align: center; padding: 10px;">
+                    ${stepIndicatorHtml(3)}
+                    <div style="width: 80px; height: 80px; border-radius: 50%; background: var(--primary-purple); color: white; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 40px;">
+                        ✓
+                    </div>
+                    <h3 style="color: var(--income); margin-bottom: 15px;">Transfer Successful!</h3>
+                    <p style="font-size: 16px; margin-bottom: 5px;">PKR ${pendingTransfer.amount.toLocaleString('en-PK')} sent to ${pendingTransfer.recipientName}</p>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 10px;">via ${pendingTransfer.method} · ${pendingTransfer.purpose}</p>
+                    <p style="font-size: 14px; color: var(--primary-purple);">You earned ${txData.points_earned} reward points!</p>
+
+                    <div class="receipt-actions">
+                        <button class="primary" onclick="downloadReceiptFromSuccess(${txId})">DOWNLOAD PDF</button>
+                        <button class="primary" onclick="emailReceipt(${txId})">EMAIL RECEIPT</button>
+                    </div>
+                    <button class="secondary" onclick="closeModal()" style="margin-top: 10px;">DONE</button>
+                </div>
+            `);
+        }
+
+        window.downloadReceiptFromSuccess = async function(txId) {
+            await downloadReceipt(new Event('click'), txId);
+        };
+
+        /* ===================== PAY BILL: MULTI-STEP FLOW ===================== */
+
+        function renderPayBillStep1() {
+            showModal(`
+                <h3>Pay Bill</h3>
+                ${stepIndicatorHtml(1)}
+                <form id="payBillStep1Form">
+                    <label for="billCategory">Bill Category</label>
+                    <select id="billCategory" required onchange="updateProviderOptions()">
+                        <option value="">Select...</option>
+                        <option value="Electricity">Electricity</option>
+                        <option value="Gas">Gas</option>
+                        <option value="Internet">Internet</option>
+                        <option value="Water">Water</option>
+                    </select>
+
+                    <label for="billProvider">Service Provider</label>
+                    <select id="billProvider" required onchange="checkSavedBillingAccount()" disabled>
+                        <option value="">Select a category first</option>
+                    </select>
+
+                    <div id="savedAccountPromptArea"></div>
+
+                    <label for="billId">Bill Reference Number</label>
+                    <input type="text" id="billId" placeholder="Enter reference number" required>
+
+                    <label for="billAmount">Amount (PKR)</label>
+                    <input type="number" id="billAmount" step="0.01" min="10" placeholder="e.g., 6200" required>
+
+                    <p class="error-message" id="payBillStep1Error">Please check the details above.</p>
+
+                    <button type="submit" class="primary">CONTINUE</button>
+                </form>
+            `);
+
+            document.getElementById('payBillStep1Form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const provider = document.getElementById('billProvider').value;
+                const billId = document.getElementById('billId').value;
+                const amount = parseFloat(document.getElementById('billAmount').value);
+                const errorMsg = document.getElementById('payBillStep1Error');
+
+                if (isNaN(amount) || amount <= 0) {
+                    errorMsg.textContent = 'Please enter a valid positive amount.';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+
+                if (!provider) {
+                    errorMsg.textContent = 'Please select a service provider.';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+
+                pendingBillPayment = {
+                    biller: provider,
+                    billId: billId,
+                    amount: amount
+                };
+
+                renderPayBillStep2();
+            });
+        }
+
+        window.updateProviderOptions = function() {
+            const category = document.getElementById('billCategory').value;
+            const providerSelect = document.getElementById('billProvider');
+            const providers = BILL_PROVIDERS[category] || [];
+
+            providerSelect.disabled = providers.length === 0;
+            providerSelect.innerHTML = providers.length
+                ? '<option value="">Select provider...</option>' + providers.map(p => `<option value="${p}">${p}</option>`).join('')
+                : '<option value="">Select a category first</option>';
+
+            document.getElementById('savedAccountPromptArea').innerHTML = '';
+        };
+
+        // Checks whether the user has a previously saved billing account for this provider.
+        // The endpoint this expects (/api/bills/saved-account) doesn't exist on the backend
+        // yet — this is Muqsoom's assigned task per the MoM. Wrapped so it fails silently
+        // and just falls through to the normal reference-number field until it's built.
+        window.checkSavedBillingAccount = async function() {
+            const provider = document.getElementById('billProvider').value;
+            const promptArea = document.getElementById('savedAccountPromptArea');
+            promptArea.innerHTML = '';
+
+            if (!provider) return;
+
+            try {
+                const response = await fetch(`/api/bills/saved-account?biller=${encodeURIComponent(provider)}`, {
+                    credentials: 'include'
+                });
+                if (!response.ok) return; // endpoint not built yet — silent fallback
+                const data = await response.json();
+
+                if (data.success && data.has_saved && data.account_number) {
+                    promptArea.innerHTML = `
+                        <div class="saved-account-prompt">
+                            Are you referring to your previously saved account <strong>${data.account_number}</strong>?
+                            <div class="prompt-actions">
+                                <button type="button" class="yes-btn" onclick="useSavedAccount('${data.account_number}')">Yes, use it</button>
+                                <button type="button" class="no-btn" onclick="document.getElementById('savedAccountPromptArea').innerHTML=''">No, enter new</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                // Endpoint not available — fine, just proceed with manual entry
+                console.log('Saved billing account check skipped:', error.message);
             }
+        };
 
+        window.useSavedAccount = function(accountNumber) {
+            document.getElementById('billId').value = accountNumber;
+            document.getElementById('savedAccountPromptArea').innerHTML = '';
+        };
+
+        function renderPayBillStep2() {
+            showModal(`
+                <h3>Confirm Bill Payment</h3>
+                ${stepIndicatorHtml(2)}
+                <div class="summary-box">
+                    <div class="summary-row"><span>Biller</span><strong>${pendingBillPayment.biller}</strong></div>
+                    <div class="summary-row"><span>Reference Number</span><strong>${pendingBillPayment.billId}</strong></div>
+                    <div class="summary-row"><span>Amount</span><strong>PKR ${pendingBillPayment.amount.toLocaleString('en-PK')}</strong></div>
+                </div>
+
+                <form id="payBillStep2Form">
+                    <label for="confirmBillPassword">Enter your password to confirm</label>
+                    <input type="password" id="confirmBillPassword" placeholder="Password" required autofocus>
+                    <p class="error-message" id="payBillStep2Error">Incorrect password. Please try again.</p>
+                    <button type="submit" class="primary">CONFIRM &amp; PAY</button>
+                    <button type="button" class="secondary" onclick="renderPayBillStep1()">BACK</button>
+                </form>
+            `);
+
+            document.getElementById('payBillStep2Form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const password = document.getElementById('confirmBillPassword').value;
+                const errorMsg = document.getElementById('payBillStep2Error');
+                const submitBtn = e.target.querySelector('button[type="submit"]');
+
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Processing...';
+
+                try {
+                    const verifyResp = await fetch('/api/user/verify-password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ password })
+                    });
+                    const verifyData = await verifyResp.json();
+
+                    if (!verifyData.success) {
+                        errorMsg.style.display = 'block';
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'CONFIRM & PAY';
+                        return;
+                    }
+
+                    await submitTransaction({
+                        type: 'bill',
+                        amount: pendingBillPayment.amount,
+                        biller: pendingBillPayment.biller,
+                        billId: pendingBillPayment.billId
+                    }, 'bill');
+
+                } catch (error) {
+                    console.error('Bill payment error:', error);
+                    errorMsg.textContent = 'Server error. Please try again.';
+                    errorMsg.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'CONFIRM & PAY';
+                }
+            });
+        }
+
+        /* ===================== SHARED TRANSACTION SUBMIT (used by Pay Bill) ===================== */
+
+        async function submitTransaction(transactionData, type) {
             try {
                 const response = await fetch('/api/transaction/create', {
                     method: 'POST',
@@ -1250,26 +2220,30 @@
                     userData.points = data.new_points;
                     updateBalanceUI();
 
-                    const transactionType = type === 'transfer' ? 'Transfer' : transactionData.biller;
-                    const successMessage = type === 'transfer'
-                        ? 'Your money has been transferred successfully!'
-                        : `Your ${transactionType} bill has been paid successfully!`;
+                    const successMessage = `Your ${transactionData.biller} bill has been paid successfully!`;
+                    const txId = data.transaction_id;
 
                     showModal(`
-                        <div style="text-align: center; padding: 20px;">
+                        <div style="text-align: center; padding: 10px;">
+                            ${stepIndicatorHtml(3)}
                             <div style="width: 80px; height: 80px; border-radius: 50%; background: var(--primary-purple); color: white; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 40px;">
                                 ✓
                             </div>
                             <h3 style="color: var(--income); margin-bottom: 15px;">Transaction Successful!</h3>
                             <p style="font-size: 16px; margin-bottom: 10px;">${successMessage}</p>
-                            <p style="font-size: 14px; color: #666; margin-bottom: 20px;">Amount: <strong>PKR ${amount.toLocaleString('en-PK')}</strong></p>
+                            <p style="font-size: 14px; color: #666; margin-bottom: 20px;">Amount: <strong>PKR ${transactionData.amount.toLocaleString('en-PK')}</strong></p>
                             <p style="font-size: 14px; color: var(--primary-purple);">You earned ${data.points_earned} reward points!</p>
-                            <button class="primary" onclick="closeModal()" style="margin-top: 20px;">DONE</button>
+                            <div class="receipt-actions">
+                                <button class="primary" onclick="downloadReceiptFromSuccess(${txId})">DOWNLOAD PDF</button>
+                                <button class="primary" onclick="emailReceipt(${txId})">EMAIL RECEIPT</button>
+                            </div>
+                            <button class="secondary" onclick="closeModal()" style="margin-top: 10px;">DONE</button>
                         </div>
                     `);
 
                     loadTransactionHistory();
                     loadReminders();
+                    loadSpendingBreakdown();
                 } else {
                     showAlert('Transaction Failed', data.message || 'Please try again.', 'error');
                 }
@@ -1277,7 +2251,9 @@
                 console.error('Transaction error:', error);
                 showAlert('Server Error', 'Unable to process transaction. Please try again.', 'error');
             }
-        };
+        }
+
+        /* ===================== REDEEM POINTS (unchanged) ===================== */
 
         window.handleRedemption = async function(event) {
             event.preventDefault();
@@ -1319,6 +2295,68 @@
                 showAlert('Server Error', 'Unable to process redemption. Please try again.', 'error');
             }
         };
+
+        /* ===================== BALANCE TOP-UP (demo) ===================== */
+
+        DOMElements.topUpBtn.addEventListener('click', () => {
+            showModal(`
+                <h3>Top Up Balance (Demo)</h3>
+                <p class="muted">For demonstration and testing purposes only.</p>
+                <form onsubmit="handleTopUp(event)">
+                    <label for="topUpAmount">Amount (PKR)</label>
+                    <input type="number" id="topUpAmount" step="0.01" min="1" placeholder="e.g., 10000" required autofocus>
+                    <p class="error-message" id="topUpError">Something went wrong. Please try again.</p>
+                    <button type="submit" class="primary">ADD FUNDS</button>
+                </form>
+            `);
+        });
+
+        window.handleTopUp = async function(event) {
+            event.preventDefault();
+            const amount = parseFloat(document.getElementById('topUpAmount').value);
+            const errorMsg = document.getElementById('topUpError');
+
+            if (isNaN(amount) || amount <= 0) {
+                errorMsg.textContent = 'Please enter a valid positive amount.';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            try {
+                // This endpoint needs to be added to app.py — see chat notes.
+                const response = await fetch('/api/user/topup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ amount })
+                });
+
+                if (response.status === 404) {
+                    errorMsg.textContent = 'Top-up endpoint not added to the backend yet — see app.py notes.';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.success) {
+                    userData.balance = data.new_balance;
+                    updateBalanceUI();
+                    closeModal();
+                    showAlert('Balance Updated', `PKR ${amount.toLocaleString('en-PK')} added. New balance: PKR ${data.new_balance.toLocaleString('en-PK')}`, 'success');
+                    loadTransactionHistory();
+                } else {
+                    errorMsg.textContent = data.message || 'Top-up failed.';
+                    errorMsg.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Top-up error:', error);
+                errorMsg.textContent = 'Server error. Please try again.';
+                errorMsg.style.display = 'block';
+            }
+        };
+
+        /* ===================== CHAT / LOGOUT ===================== */
 
         DOMElements.chatAiBtn.addEventListener('click', () => {
             window.location.href = "/chat";
@@ -1494,13 +2532,17 @@
                 
                 if (response.ok) {
                     const data = await response.json();
+                    const categories = data.spending_by_category || {};
+                    const total = Object.values(categories).reduce((sum, v) => sum + v, 0);
                     
                     let categoryHTML = '';
-                    if (data.spending_by_category && Object.keys(data.spending_by_category).length > 0) {
-                        for (const [category, amount] of Object.entries(data.spending_by_category)) {
+                    if (Object.keys(categories).length > 0) {
+                        for (const [category, amount] of Object.entries(categories)) {
+                            const pct = total > 0 ? ((amount / total) * 100).toFixed(1) : '0.0';
                             categoryHTML += `
-                                <div style="padding: 10px; border-bottom: 1px solid var(--secondary-purple);">
-                                    <strong>${category}:</strong> PKR ${amount.toLocaleString('en-PK', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                <div style="padding: 10px; border-bottom: 1px solid var(--secondary-purple); display: flex; justify-content: space-between;">
+                                    <strong>${category}</strong>
+                                    <span>PKR ${amount.toLocaleString('en-PK', {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${pct}%)</span>
                                 </div>
                             `;
                         }

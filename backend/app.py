@@ -739,6 +739,23 @@ def change_password():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/user/topup', methods=['POST'])
+def topup_balance():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    data = request.json
+    amount = float(data.get('amount', 0))
+    if amount <= 0:
+        return jsonify({'success': False, 'message': 'Invalid amount'}), 400
+    account_number = session['account_number']
+    conn = get_db(); c = conn.cursor()
+    c.execute("UPDATE dashboard_users SET balance = balance + ? WHERE account_number=?", (amount, account_number))
+    conn.commit()
+    c.execute("SELECT balance FROM dashboard_users WHERE account_number=?", (account_number,))
+    new_balance = c.fetchone()['balance']
+    conn.close()
+    return jsonify({'success': True, 'new_balance': new_balance})
+
 @app.route('/api/transaction/create', methods=['POST'])
 def create_transaction():
     if 'user_id' not in session:
@@ -818,7 +835,7 @@ def transaction_history():
         conn = get_db()
         c = conn.cursor()
         c.execute("""
-            SELECT transaction_type, description, amount, created_at 
+            SELECT id, transaction_type, description, amount, created_at 
             FROM dashboard_transactions 
             WHERE account_number=? 
             ORDER BY created_at DESC 
@@ -831,6 +848,7 @@ def transaction_history():
             formatted_date = date_obj.strftime('%b %d, %Y')
             
             transactions.append({
+                'id': row['id'],
                 'date': formatted_date,
                 'description': row['description'],
                 'amount': row['amount']
