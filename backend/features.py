@@ -394,3 +394,104 @@ def trigger_emergency(account, password, entered_password):
     alert_fraud_team(account, "Emergency mode triggered by user.")
     guide = safety_guide()
     return {"success": True, "steps": guide}
+
+# ---------- CARDS SERVICE (Emergency Feature) ----------
+def has_registered_card(account):
+    """
+    Checks whether the given account has at least one card on file.
+    Used to conditionally show/hide the Emergency button on the frontend.
+    """
+    conn = _conn(); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM cards WHERE account_number=?", (account,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
+
+
+def list_cards(account):
+    """
+    Returns all cards registered to an account (id, masked card number, status).
+    Card numbers are masked here so raw PANs never leave the backend unnecessarily.
+    """
+    conn = _conn(); c = conn.cursor()
+    c.execute("SELECT id, card_number, status FROM cards WHERE account_number=?", (account,))
+    rows = c.fetchall(); conn.close()
+    out = []
+    for card_id, card_number, status in rows:
+        masked = f"**** **** **** {card_number[-4:]}" if card_number and len(card_number) >= 4 else "****"
+        out.append({"card_id": card_id, "card_number_masked": masked, "status": status})
+    return out
+
+# ---------- BILL PROVIDERS (Service Provider Level) ----------
+
+BILL_PROVIDERS = {
+    'electricity': ['K-Electric', 'LESCO', 'MEPCO', 'HESCO'],
+    'internet':    ['PTCL', 'Transworld', 'Stormfiber', 'Nayatel'],
+    'gas':         ['SSGC', 'SNGPL'],
+}
+
+
+def validate_provider(category, provider_name):
+    """
+    Checks whether a given provider name belongs to the given utility category.
+    Comparison is case-insensitive; returns the canonical casing if valid, None otherwise.
+    e.g. validate_provider('electricity', 'k-electric') → 'K-Electric'
+    """
+    providers = BILL_PROVIDERS.get(category.lower(), [])
+    for p in providers:
+        if p.lower() == provider_name.lower():
+            return p  # return correctly-cased name for storage
+    return None
+
+
+def get_saved_biller_ref(account, provider):
+    """
+    Looks up the most recently used billing reference number for this
+    specific provider from the bills table.
+    Used for the MoM 'proactive saved account' prompt:
+    e.g. "Are you referring to your previously saved account 112233?"
+    Returns the ref string if found, None if this provider has no history.
+    """
+    conn = _conn(); c = conn.cursor()
+    c.execute("""
+        SELECT ref FROM bills
+        WHERE account_number=? AND biller=? AND ref IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (account, provider))
+    row = c.fetchone(); conn.close()
+    return row[0] if row else None
+
+
+# ---------- REDEMPTION TIERS ----------
+
+# Defines all 3 redemption tiers: points cost and PKR value each tier gives.
+REDEMPTION_TIERS = {
+    'cash_voucher':      {'points_cost': 500,  'pkr_value': 250},
+    'product_purchase':  {'points_cost': 1000, 'pkr_value': 500},
+    'investment_pocket': {'points_cost': 750,  'pkr_value': 375},
+}
+
+# Mock product catalogue for the product_purchase tier.
+# In production this would be a DB table or an external inventory API.
+MOCK_PRODUCT_CATALOGUE = {
+    'P001': {'name': 'FinBud Prepaid Mobile Recharge', 'pkr_value': 200},
+    'P002': {'name': 'FinBud Shopping Gift Voucher',   'pkr_value': 500},
+    'P003': {'name': 'FinBud Utility Bill Discount',   'pkr_value': 300},
+}
+
+
+def get_product(product_id):
+    """
+    Returns product details from the mock catalogue by product ID.
+    Returns None if the product_id does not exist.
+    """
+    return MOCK_PRODUCT_CATALOGUE.get(product_id)
+
+
+def get_redemption_tier(tier_name):
+    """
+    Returns the config dict for a redemption tier (points_cost, pkr_value).
+    Returns None if tier_name is not one of the 3 valid options.
+    """
+    return REDEMPTION_TIERS.get(tier_name)
