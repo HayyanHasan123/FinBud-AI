@@ -12,7 +12,9 @@ from features import (
     init_db, log_late_payment, get_points, add_points, redeem_points,
     add_bill, mark_paid, list_pending, generate_reminders, get_inbox,
     detect_anomalies, create_ticket, queue_list, claim, resolve, cancel,
-    status, trigger_emergency, has_registered_card, list_cards
+    status, trigger_emergency, has_registered_card, list_cards,
+    BILL_PROVIDERS, REDEMPTION_TIERS, MOCK_PRODUCT_CATALOGUE,
+    validate_provider, get_saved_biller_ref, get_product, get_redemption_tier
 )
 
 from nlp_module import BankAIConversation
@@ -345,7 +347,22 @@ def chat_message():
 
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
-                    session['conversation_context'] = {}
+                elif original_intent == 'pay_bill':
+                   bill_type = entities.get('bill_type')
+                   amount = entities.get('amount')
+                   bill_account = entities.get('account_number')
+
+                if user['balance'] < amount:
+                    ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
+                    # Preserve bill context so the user does not restart the
+                    # entire flow after a top-up — they can retry from here.
+                    session['conversation_context'] = {
+                        'current_flow':   'pay_bill',
+                        'bill_type':      bill_type,
+                        'amount':         amount,
+                        'account_number': bill_account,
+                        'insufficient_funds_retry': True
+                    }
                 else:
                     points_earned = int(amount // 1000) * 5
                     new_balance = user['balance'] - amount
@@ -1048,6 +1065,173 @@ def api_cards_list():
     account_number = session['account_number']
     cards = list_cards(account_number)
     return jsonify({'success': True, 'account': account_number, 'cards': cards})
+
+# ============= REWARDS REDEMPTION API (3-Tier) =============
+
+@app.route('/api/rewards/redeem', methods=['POST'])
+def redeem_reward():
+    """
+    Handles all 3 redemption tiers in one clean endpoint.
+    Body: {
+        "tier": "cash_voucher" | "product_purchase" | "investment_pocket",
+        "product_id": "P001"   ← only required when tier == "product_purchase"
+    }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        data           = request.json
+        tier_name      = data.get('tier', '').strip()
+        product_id     = data.get('product_id', '').strip()
+        account_number = session['account_number']
+
+        # --- Validate tier ---
+        tier = get_redemption_tier(tier_name)
+        if not tier:
+            return jsonify({
+                'success': False,
+                'message': f'Invalid tier. Choose from: {", ".join(REDEMPTION_TIERS.keys())}'
+            }), 400
+
+        points_cost = tier['points_cost']
+        pkr_value   = tier['pkr_value']
+
+        # --- For product_purchase, validate product exists ---
+        product = None
+        if tier_name == 'product_purchase':
+            if not product_id:
+                return jsonify({
+                    'success': False,
+                    'message': 'product_id is required for product_purchase tier.',
+                    'available_products': MOCK_PRODUCT_CATALOGUE
+                }), 400
+            product = get_product(product_id)
+            if not product:
+                return jsonify({
+                    'success': False,
+                    'message': f'Product {product_id} not found.',
+                    'available_products': MOCK_PRODUCT_CATALOGUE
+                }), 404
+            pkr_value = product['pkr_value']
+
+        # --- Deduct points using existing redeem_points() ---
+        success, remaining_points = redeem_points(account_number, points_cost)
+        if not success:
+            current_points = remaining_points  # redeem_points returns current pts on failure
+            return jsonify({
+                'success': False,
+                'message': f'Insufficient points. You have {current_points} pts, need {points_cost} pts.',
+                'current_points': current_points,
+                'required_points': points_cost
+            }), 400
+
+        # --- Apply tier-specific balance/transaction effect ---
+        conn = get_db()
+        c    = conn.cursor()
+
+        c.execute("SELECT balance FROM dashboard_users WHERE account_number=?", (account_number,))
+        user_row    = c.fetchone()
+        new_balance = user_row['balance']
+
+        if tier_name == 'cash_voucher':
+            # Credit PKR directly to main account balance
+            new_balance += pkr_value
+            c.execute("UPDATE dashboard_users SET balance=? WHERE account_number=?",
+                      (new_balance, account_number))
+            description = f'Cash Voucher Redeemed — PKR {pkr_value} credited'
+
+        elif tier_name == 'product_purchase':
+            # Mock checkout: no balance change (product dispatched/issued)
+            description = f'Product Redeemed — {product["name"]} (PKR {pkr_value})'
+
+        elif tier_name == 'investment_pocket':
+            # Credit PKR to balance, tagged as an investment pocket transfer
+            new_balance += pkr_value
+            c.execute("UPDATE dashboard_users SET balance=? WHERE account_number=?",
+                      (new_balance, account_number))
+            description = f'Investment Pocket Transfer — PKR {pkr_value} credited'
+
+        # --- Log to redemptions table ---
+        c.execute("""
+            INSERT INTO redemptions(account_number, points_used, reward_value, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (account_number, points_cost, pkr_value, datetime.utcnow().isoformat()))
+
+        # --- Log to dashboard_transactions for receipt/history visibility ---
+        c.execute("""
+            INSERT INTO dashboard_transactions(account_number, transaction_type, description, amount, status, created_at)
+            VALUES (?, 'redemption', ?, ?, 'completed', ?)
+        """, (account_number, description, pkr_value, datetime.utcnow().isoformat()))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            'success':          True,
+            'tier':             tier_name,
+            'points_used':      points_cost,
+            'pkr_value':        pkr_value,
+            'remaining_points': remaining_points,
+            'new_balance':      new_balance,
+            'description':      description,
+            'product':          product  # None for non-product tiers
+        })
+
+    except Exception as e:
+        print(f"Redemption error: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ============= BILL PROVIDERS API =============
+
+@app.route('/api/bills/providers', methods=['GET'])
+def get_bill_providers():
+    """
+    Returns the full provider list for all utility categories.
+    Muqsoom calls this once on page load to populate the provider dropdowns.
+    Optional query param: ?category=electricity | internet | gas
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    category = request.args.get('category', '').strip().lower()
+
+    if category:
+        providers = BILL_PROVIDERS.get(category)
+        if not providers:
+            return jsonify({
+                'success': False,
+                'message': f'Unknown category. Valid options: {", ".join(BILL_PROVIDERS.keys())}'
+            }), 400
+        return jsonify({'success': True, 'category': category, 'providers': providers})
+
+    # No category filter — return all
+    return jsonify({'success': True, 'providers': BILL_PROVIDERS})
+
+
+@app.route('/api/bills/saved-ref', methods=['GET'])
+def get_saved_bill_ref():
+    """
+    Checks whether the logged-in user has a previously saved billing reference
+    for a given provider. Drives the MoM 'proactive saved account' prompt.
+    Query param: ?provider=K-Electric
+    Response: { "has_saved_ref": true, "ref": "112233" }
+              { "has_saved_ref": false }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    provider = request.args.get('provider', '').strip()
+    if not provider:
+        return jsonify({'success': False, 'message': 'provider query param is required'}), 400
+
+    account_number = session['account_number']
+    saved_ref      = get_saved_biller_ref(account_number, provider)
+
+    if saved_ref:
+        return jsonify({'success': True, 'has_saved_ref': True,  'ref': saved_ref, 'provider': provider})
+    return jsonify(    {'success': True, 'has_saved_ref': False, 'ref': None,      'provider': provider})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
