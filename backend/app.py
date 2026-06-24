@@ -10,7 +10,7 @@ import io
 
 from features import (
     init_db, log_late_payment, get_points, add_points, redeem_points,
-    add_bill, mark_paid, list_pending, generate_reminders, get_inbox,
+    add_bill, save_paid_bill_ref, mark_paid, list_pending, generate_reminders, get_inbox,
     detect_anomalies, create_ticket, queue_list, claim, resolve, cancel,
     status, trigger_emergency, has_registered_card, list_cards,
     BILL_PROVIDERS, REDEMPTION_TIERS, MOCK_PRODUCT_CATALOGUE,
@@ -497,12 +497,30 @@ def chat_message():
         conn.commit()
         conn.close()
 
+        # Read back what the NLP wrote into session so the frontend knows
+        # whether to show the password confirmation modal.
+        ctx                   = session.get('conversation_context', {})
+        awaiting_pw           = ctx.get('awaiting_password', False)
+        awaiting_emergency_pw = ctx.get('awaiting_emergency_password', False)
+
+        # When a password is required the real transaction details live in
+        # pending_entities, not in the top-level entities dict. Merge them
+        # so the frontend modal can display a proper summary box.
+        effective_entities = dict(entities or {})
+        if awaiting_pw or awaiting_emergency_pw:
+            pending = ctx.get('pending_entities') or nlp_result.get('pending_entities') or {}
+            effective_entities.update(pending)
+
+        session.modified = True   # guarantee Flask saves session this request
+
         return jsonify({
             'success': True,
             'ai_response': ai_response,
-            'intent': intent,
+            'intent': ctx.get('original_intent') or nlp_result.get('original_intent') or intent,
             'language': language,
-            'entities': entities
+            'entities': effective_entities,
+            'awaiting_password': awaiting_pw,
+            'awaiting_emergency_password': awaiting_emergency_pw
         })
 
     except Exception as e:
@@ -812,6 +830,16 @@ def create_transaction():
         transaction_id = c.lastrowid
         conn.close()
 
+        # Automatically remember this reference number for next time (Option A:
+        # no extra consent step — it's saved transparently as part of paying).
+        # Uses features.py's own connection/table, separate from dashboard_*.
+        if transaction_type != 'transfer':
+            try:
+                save_paid_bill_ref(account_number, data.get('biller'), amount, data.get('billId'))
+            except Exception as ref_err:
+                # Never let a ref-saving hiccup fail a payment that already succeeded.
+                print(f"Warning: could not save billing ref: {ref_err}")
+
         return jsonify({
             'success': True,
             'transaction_id': transaction_id,
@@ -928,6 +956,17 @@ def spending_by_category():
         
         transactions = c.fetchall()
         conn.close()
+
+        # Older bill payments (pre-fix) stored the category name itself as
+        # `biller` (e.g. "Electricity"), while newer ones store the actual
+        # provider (e.g. "K-Electric"). Build a provider -> category lookup
+        # from BILL_PROVIDERS so both old and new rows land in the same
+        # bucket instead of showing as separate slices in this chart.
+        provider_to_category = {
+            provider.lower(): category.capitalize()
+            for category, providers in BILL_PROVIDERS.items()
+            for provider in providers
+        }
         
         spending_by_category = {}
         for txn in transactions:
@@ -936,7 +975,13 @@ def spending_by_category():
             amount = abs(txn['amount'])
             
             if txn_type == 'bill':
-                category = biller if biller else 'Bill Payment'
+                if biller:
+                    # Known provider name (e.g. "K-Electric") -> its category
+                    # ("Electricity"); already-a-category or unknown billers
+                    # ("Electricity", "Water Board", etc.) pass through as-is.
+                    category = provider_to_category.get(biller.lower(), biller)
+                else:
+                    category = 'Bill Payment'
             elif txn_type == 'transfer':
                 category = 'Transfers'
             else:

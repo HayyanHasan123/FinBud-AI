@@ -1,8 +1,16 @@
 # features.py
 import sqlite3
+import os
 from datetime import datetime, date
 
-DB = 'FinBudAi.db'
+# Must resolve to the SAME file app.py uses. app.py computes:
+#   os.path.join(os.path.dirname(__file__), '..', 'FinBudAi.db')
+# A bare relative path here ('FinBudAi.db') would resolve relative to the
+# process's current working directory instead of this file's location, which
+# silently pointed at a *different* database file whenever the app wasn't
+# launched from this exact folder — breaking any cross-table lookups (e.g.
+# get_saved_biller_ref) between dashboard_users and bills/rewards/etc.
+DB = os.path.join(os.path.dirname(__file__), '..', 'FinBudAi.db')
 
 # ---------- DATABASE INIT ----------
 def init_db():
@@ -168,6 +176,29 @@ def add_bill(account, biller, amount, due_date, ref=None):
     c.execute("""INSERT INTO bills(account_number, biller, amount, due_date, status, paid_on, ref, created_at)
                  VALUES (?, ?, ?, ?, 'unpaid', NULL, ?, ?)""",
               (account, biller, float(amount), due_date, ref, datetime.utcnow().isoformat()))
+    conn.commit(); bill_id = c.lastrowid; conn.close()
+    return bill_id
+
+def save_paid_bill_ref(account, biller, amount, ref):
+    """Records a bill paid directly through the dashboard's Pay Bill flow
+    (i.e. via /api/transaction/create) into the bills table, already marked
+    'paid', purely so the reference number can be surfaced later by
+    get_saved_biller_ref for the "previously saved account" prompt.
+
+    Unlike add_bill(), this is inserted as status='paid' from the start, so
+    it never shows up in list_pending() or generate_reminders() — those both
+    filter on status='unpaid', and a bill the user just finished paying isn't
+    a pending bill to remind them about.
+
+    No-op if ref is empty, since there's nothing useful to remember.
+    """
+    if not ref:
+        return None
+    today = date.today().isoformat()
+    conn = _conn(); c = conn.cursor()
+    c.execute("""INSERT INTO bills(account_number, biller, amount, due_date, status, paid_on, ref, created_at)
+                 VALUES (?, ?, ?, ?, 'paid', ?, ?, ?)""",
+              (account, biller, float(amount), today, today, ref, datetime.utcnow().isoformat()))
     conn.commit(); bill_id = c.lastrowid; conn.close()
     return bill_id
 
