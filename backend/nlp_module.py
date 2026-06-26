@@ -1,32 +1,23 @@
 """
-BankAI - Pure AI Conversation Engine
+BankAI - Conversational NLP Engine
 
-Table-driven state machine + global interceptor layer for multi-step
-banking conversations (transfer, bill pay, points redemption, emergency
-card block). Replaces the old nested if/elif branching with a declarative
-Slot/FlowState transition table, fronted by a global interceptor that
-handles emergency pre-emption, cancellation, and contextual help before
+Table-driven state machine with a global interceptor layer for multi-step
+banking conversations: money transfer, bill payment, points redemption,
+and emergency card blocking. A global interceptor handles emergency
+pre-emption, cancellation, edit-previous-step, and contextual help before
 any flow-specific logic runs.
 
-All prior corrections (lakh/crore amount parsing, word-boundary account
-validation, Roman-Urdu verb filtering, password scrubbing/redaction) are
-carried forward as module-level extractor functions and wired directly
-into the slot table.
-
-`process_message()` is the single public entrypoint. It returns the same
-flat dict shape app.py already consumes (intent / entities / current_flow
-/ awaiting_password / pending_entities / etc.), so existing app.py wiring
-keeps working unmodified. New behavior (confirmation step, edit-previous,
-suspended emergency state) is layered on additively via new optional
-keys - see the integration notes near the bottom of the file for what
-app.py would need to read to light up the confirmation/edit/suspend
-behavior end-to-end.
+`process_message()` is the public entrypoint. It returns a flat dict
+(intent / entities / current_flow / awaiting_password / pending_entities
+/ session_language / etc.) for the calling application to persist in
+session state and render against localized response templates.
 """
 
 import re
+import unicodedata
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Any, Dict, List
+from typing import Callable, Optional, Any, Dict, List, Tuple
 
 
 # Fields that must never leak into logs or downstream payloads.
@@ -96,10 +87,10 @@ FLOW_STATE_TO_LEGACY_FLOW = {
     FlowState.REDEEM_AWAIT_CHOICE: 'redeem_points',
 }
 
-# The ordered slot sequence for each flow - this IS the "transitions table"
-# the blueprint calls for: given a FlowState, what slot are we filling, and
-# what state do we move to once it's filled. Order matters: it's also what
-# the edit-previous-step utility walks backwards over.
+# The ordered slot sequence for each flow: given a FlowState, this defines
+# which slot is being filled and what state to move to once it's filled.
+# Order matters - it's also what the edit-previous-step utility walks
+# backwards over.
 FLOW_SLOT_ORDER = {
     'transfer_money': ['amount', 'recipient', 'account_number'],
     'pay_bill': ['bill_type', 'bill_reference', 'amount'],
@@ -140,78 +131,190 @@ class Slot:
 
 
 INTENT_PATTERNS = {
+    # ── check_balance ────────────────────────────────────────────────────────
     'check_balance': [
-        r'(balance|kitna|kitni|baki|remaining)',
-        r'(mere|mera|my)\s*(account|khata)',
-        r'(show|dekha|batao|check)\s*(balance|paisa)',
+        # Original Roman Urdu words (before slang substitution)
+        r'\b(balance|kitna|kitni|baki|remaining)\b',
+        r'\b(mere|mera|my)\s*(account|khata|khaata)\b',
+        r'\b(show|dekha|batao|btao|check|dekho)\s*(balance|paisa|bakiya)\b',
+        r'\bbalance\s*(check|dekh|batao|maloom)\b',
+        r'\bkhata\s*(check|dekh|batao)\b',
+        r'\bkhaata\s*(check|dekh|batao)\b',
+        r'\b(rakam|raqam)\s*(batao|check|maloom)\b',
+        # Normalized English equivalents (after slang substitution)
+        r'\baccount\s*(check|balance|remaining)\b',
+        r'\bmy\s*account\b',
+        r'\bhow\s*much\s*(is\s*in|do\s*i\s*have|money|balance)\b',
+        r'\bremaining\s*(balance|amount|money)\b',
+        r'\bcheck\s*(my\s*)?balance\b',
+        # Urdu script
+        r'بیل[نی][سص]',
+        r'بیل[نی][سص]\s*(بتا[وؤ]|چیک|دیکھ)',
+        r'(میرا|مجھے)\s*(بیل[نی][سص]|بقیہ)',
+        r'بقیہ\s*(بتا[وؤ]|دیکھ)',
+        r'(دکھا[وؤ]|بتا[وؤ]|چیک\s*کر[وؤ])\s*بیل[نی][سص]',
+        r'(اکاؤنٹ|کھاتہ)\s*(چیک|دیکھ)',
     ],
 
+    # ── transfer_money ───────────────────────────────────────────────────────
     'transfer_money': [
-        r'(send|bhej|transfer|payment)',
-        r'(pay|bhejo)\s*.*\s*to',
-        r'paisa\s*bhejo',
-        r'transfer\s*karo',
-        r'money\s*(send|transfer)',
+        # Original Roman Urdu words
+        r'\b(send|bhej|transfer|payment)\b',
+        r'\b(pay|bhejo)\b.*\bto\b',
+        r'\bpaisa[ey]?\s*(bhejo|bhej|transfer)\b',
+        r'\bpaisy\s*(bhejo|bhej|transfer)\b',
+        r'\btransfer\s*karo\b',
+        r'\bmoney\s*(send|transfer)\b',
+        r'\b(rakam|raqam)\s*(bhejo|bhej|transfer)\b',
+        r'\b(paise|paisa|paisay|paisy)\s*(bhejna|bhejdo|bhej\s*do|transfer)\b',
+        # Normalized English equivalents
+        r'\bsend\s*money\b',
+        r'\btransfer\s*amount\b',
+        r'\bmoney\s*send\b',
+        # Urdu script
+        r'پیس[ےے]\s*(بھیج[وؤ]|ٹرانسفر)',
+        r'رقم\s*(بھیج[وؤ]|ٹرانسفر\s*کر[وؤ])',
+        r'(بھیج[وؤ]|بھیجنا|بھیج\s*دو)',
+        r'ٹرانسفر\s*کر[وؤ]',
+        r'(کو|کے\s*لیے)\s*پیس[ےے]\s*(بھیج|دے)',
     ],
 
+    # ── pay_bill ─────────────────────────────────────────────────────────────
     'pay_bill': [
-        r'(bill|bijli|pani|gas|sui\s*gas)',
-        r'(electricity|k-electric|lesco|ptcl)',
-        r'bill\s*(pay|karo|karna|ada)',
-        r'(bijli|sui\s*gas|pani)\s*ka\s*bill',
-        r'(k-electric|lesco|ptcl|gas)\s*(ka\s*)?(bill)',
-        r'pay\s*(my)?\s*bill',
+        # Original Roman Urdu words
+        r'\b(bill|bijli|bijlee|bjili|bijly|pani|paani|gas|sui\s*gas|suigas|sui\s*gais)\b',
+        r'\b(electricity|k-electric|lesco|ptcl)\b',
+        r'\bbill\s*(pay|karo|karna|ada|bharo)\b',
+        r'\b(bijli|bijlee|bjili|bijly|sui\s*gas|pani|paani)\s*ka\s*bill\b',
+        r'\b(k-electric|lesco|ptcl|gas)\s*(ka\s*)?(bills?)\b',
+        r'\bpay\s*(my\s*)?bills?\b',
+        r'\butility\s*bills?\b',
+        r'\bbilling\b',
+        # Normalized English equivalents
+        r'\belectricity\s*(bill|pay|ka)?\b',
+        r'\bwater\s*(bill|pay|ka)?\b',
+        r'\bgas\s*(bill|pay|ka)?\b',
+        r'\bpay\s*(electricity|water|gas|internet)\b',
+        # Urdu script
+        r'بل\s*(ادا\s*کر[وؤ]|جمع\s*کر[وؤ]|بھر[وؤ]|pay)',
+        r'(بجلی|گیس|پانی|انٹرنیٹ)\s*(کا\s*)?بل',
+        r'(k-electric|lesco|ptcl|sui\s*گیس)\s*(کا\s*)?بل',
+        r'یوٹیلیٹی\s*بل',
     ],
 
+    # ── transaction_history ──────────────────────────────────────────────────
     'transaction_history': [
-        r'(history|transactions|statement)',
-        r'(last|pichle)\s*transaction',
+        # Original Roman Urdu words
+        r'\b(history|transactions?|statement)\b',
+        r'\b(last|pichle|pichli)\s*transactions?\b',
+        r'\btarikh\b',
+        r'\b(lain\s*dain|len\s*den)\b',
+        r'\braseed\b',
+        r'\bpichle\b',
+        # Normalized English equivalents (raseed→receipt, tarikh→history)
+        r'\breceipt\b',
+        r'\b(show|display|check)\s*(my\s*)?(history|transactions?|statement)\b',
+        r'\brecent\s*(transactions?|history)\b',
+        r'\bmy\s*(transactions?|history|statement)\b',
+        # Urdu script
+        r'لین\s*دین',
+        r'(پچھلے|گزشتہ)\s*(ٹرانزیکشن|لین\s*دین)',
+        r'اکاؤنٹ\s*(سٹیٹمنٹ|تاریخ)',
+        r'رسید',
     ],
 
-    # redeem_points is checked before check_rewards: its patterns are
-    # strictly more specific (they require "redeem"/"use"/"exchange"
-    # alongside "points"), whereas check_rewards's bare
-    # `(reward|points)` pattern would otherwise win the match race
-    # for phrases like "I want to use my points" and shadow the
-    # more specific redeem intent entirely.
+    # ── redeem_points  (checked BEFORE check_rewards — more specific) ────────
     'redeem_points': [
-        r'redeem\s*(my\s*|your\s*)?(points|rewards)',
-        r'(use|exchange)\s*(my\s*|your\s*)?points',
-        r'points\s*(redeem|use)',
+        # Original Roman Urdu words
+        r'\bredeem\s*(my\s*|your\s*)?(points?|rewards?)\b',
+        r'\b(use|exchange)\s*(my\s*|your\s*)?points?\b',
+        r'\bpoints?\s*(redeem|use)\b',
+        r'\bpoints?\s*(use\s*karna|use\s*karo|exchange\s*karo)\b',
+        # Urdu script (ئ / ي both covered post-diacritic-strip)
+        r'پوا[\u0626\u064A]نٹس?\s*(استعمال|ریڈیم|ریڈیم\s*کر[وؤ])',
+        r'(میرے|اپنے)\s*پوا[\u0626\u064A]نٹس?\s*(استعمال|ریڈیم)',
     ],
 
+    # ── check_rewards ────────────────────────────────────────────────────────
     'check_rewards': [
-        r'(reward|points)',
-        r'(mere|my)\s*points',
-        r'kitne\s*points',
+        # Original Roman Urdu words
+        r'\b(reward|points?)\b',
+        r'\b(mere|my)\s*points?\b',
+        r'\bkitne\s*(points?|rewards?)\b',
+        r'\bpoints?\s*kitne\b',
+        r'\bpoints?\s*(check|batao|dekho|maloom|hain|hai)\b',
+        # Normalized English equivalents
+        r'\bhow\s*(many|much)\s*(points?|rewards?)\b',
+        r'\bcheck\s*(my\s*)?(points?|rewards?)\b',
+        r'\b(my\s*)?(points?|rewards?)\s*(balance|count|total)\b',
+        # Urdu script
+        r'(میرے|کتنے)\s*پوا[\u0626\u064A]نٹس?',
+        r'(انعام|ریوارڈ)\s*(چیک|بتا[وؤ]|دیکھ)',
+        r'پوا[\u0626\u064A]نٹس?\s*(کتنے|باقی|بتا[وؤ])',
     ],
 
+    # ── bill_reminders ───────────────────────────────────────────────────────
     'bill_reminders': [
-        r'(reminder|yaad)',
-        r'(upcoming|pending|baki)\s*bills?',
-        r'show.*bills?',
-        r'batao.*bills?',
+        # Original Roman Urdu words
+        r'\b(reminder|yaad)\b',
+        r'\b(upcoming|pending|baki)\s*bills?\b',
+        r'\bshow\b.*\bbills?\b',
+        r'\bbatao\b.*\bbills?\b',
+        r'\bbill\s*(reminder|yaad\s*dilao)\b',
+        r'\bmy\s*bills?\b',
+        # Normalized equivalents (yaad→reminder, baki→remaining)
+        r'\breminder\b',
+        r'\bpending\s*(payments?|dues?|bills?)\b',
+        r'\bshow.*pending\b',
+        # Urdu script
+        r'(آنے\s*والے|زیر\s*التوا)\s*بل',
+        r'بل\s*(یادہانی|یاد\s*دلا[وؤ])',
+        r'(پنڈنگ|باقی)\s*بل',
     ],
 
+    # ── emergency ────────────────────────────────────────────────────────────
     'emergency': [
-        r'(block|lock|band)\s*(card|my\s*card)',
-        r'card\s*(block|lock|band)\s*karo',
-        r'mere\s*card\s*(block|lock|band)',
-        r'emergency',
+        # Original Roman Urdu words
+        r'\b(block|lock|band)\s*(card|my\s*card)\b',
+        r'\bcard\s*(block|lock|band)\s*karo\b',
+        r'\bmere\s*card\s*(block|lock|band)\b',
+        r'\bemergency\b',
+        r'\b(chori|gum|churaya|khoya)\b',
+        r'\bcard\s*(gum|khoya|chori)\b',
+        r'\b(fraud|unauthorized)\b',
+        # Normalized English equivalents (chori→theft, gum→lost, churaya→stolen)
+        r'\b(theft|stolen|lost)\b',
+        r'\bcard\s*(theft|stolen|lost|block|lock)\b',
+        r'\b(block|lock)\s*(my\s*)?card\b',
+        # Urdu script
+        r'کارڈ\s*(بلاک|لاک|بند)\s*(کر[وؤ])?',
+        r'(کارڈ\s*چوری|کارڈ\s*گم)',
+        r'(ایمرجنسی|فوری)',
+        r'غیر\s*مجاز\s*(ٹرانزیکشن|لین\s*دین)',
     ],
 
+    # ── human_agent ──────────────────────────────────────────────────────────
     'human_agent': [
-        r'(human|person|agent)',
-        r'kisi\s*se\s*baat',
+        # Original Roman Urdu words
+        r'\b(human|person|agent)\b',
+        r'\bkisi\s*se\s*baat\b',
+        r'\b(customer\s*service|support|helpline)\b',
+        r'\b(baat\s*karni|baat\s*karo)\b',
+        # Urdu script
+        r'(انسان|ایجنٹ|نمائندہ)\s*(سے\s*بات|چاہیے)',
+        r'کسٹمر\s*(سروس|سپورٹ)',
+        r'کسی\s*سے\s*بات',
     ],
 }
 
-# SEC-3: global cancel patterns - checked on every turn, regardless of
+# Global cancel patterns - checked on every turn, regardless of
 # active flow, before any slot extraction happens.
 CANCEL_PATTERNS = [
     r'^\s*cancel\s*$',
     r'^\s*stop\s*$',
     r'^\s*ruko\s*$',
+    r'\bruko\b',
+    r'\brok\s*do\b',
     r'\bcancel\s*(it|this|transaction|transfer)\b',
     r'\bnever\s*mind\b',
     r'\bnevermind\b',
@@ -219,17 +322,27 @@ CANCEL_PATTERNS = [
     r'\bband\s*kar\s*do\b(?!\s*card)',  # "band kar do" (stop), but NOT "band kar do card" (card-block emergency)
 ]
 
-# SEC-4: edit-previous-step trigger patterns.
+# Edit-previous-step trigger patterns.
 EDIT_PREVIOUS_PATTERNS = [
     r'\bactually\b',
     r'\bgo\s*back\b',
     r'\bchange\s*(it|that|amount|recipient|name)\b',
     r'\bwait\s*,?\s*make\s*it\b',
+    r'\bno\s*,?\s*wait\b',
+    r'\boh\s*,?\s*wait\b',
+    r'\bhold\s*on\b',
+    r'\bi\s*meant\b',
+    r'\bmeant\s*to\s*say\b',
+    r'\bsorry\s*,?\s*i\s*meant\b',
+    r'\bnot\s*that\s*,?\s*i\s*(want|need)\b',
+    r'\bthat\'?s\s*wrong\b',
     r'\binstead\b',
     r'\bedit\b',
     r'\bcorrection\b',
     r'\bgalat\s*(tha|hai)\b',  # "galat tha/hai" - that was wrong
     r'\bpeeche\s*jao\b',       # "peeche jao" - go back
+    r'\bnahi\s*,?\s*woh\b',    # "nahi, woh..." - no, that.../the other one
+    r'\bghalti\s*se\b',        # "ghalti se" - by mistake
 ]
 
 # Contextual help trigger patterns.
@@ -241,7 +354,7 @@ HELP_PATTERNS = [
     r'^\s*\?\s*$',
 ]
 
-# Affirmative / negative responses for the confirmation step (SEC-2).
+# Affirmative / negative responses for the confirmation step.
 AFFIRMATIVE_PATTERNS = [
     r'^\s*yes\s*$', r'^\s*y\s*$', r'^\s*yeah\s*$', r'^\s*yep\s*$',
     r'^\s*confirm(ed)?\s*$', r'^\s*ok(ay)?\s*$', r'^\s*haan\s*ji?\s*$',
@@ -253,29 +366,123 @@ NEGATIVE_PATTERNS = [
     r'^\s*nope\s*$', r'^\s*cancel\s*$', r'^\s*galat\s*$',
 ]
 
-# Enhanced slang mapping.
+# ── SLANG_MAPPING ─────────────────────────────────────────────────────────
+# Maps Roman Urdu / local phonetic variants → canonical English equivalents.
+# CRITICAL: entity extractors (names, account numbers, amounts) operate on
+# the ORIGINAL user text, never on slang-substituted text. See the
+# normalization pipeline below for the two-track (display vs. match) design.
 SLANG_MAPPING = {
+    # Electricity / bijli phonetic bucket
     'bijli': 'electricity',
     'bjili': 'electricity',
+    'bijly': 'electricity',
+    'bijlee': 'electricity',
+    'bijlee': 'electricity',
+    'bijaly': 'electricity',
+    # Water / pani
     'pani': 'water',
+    'paani': 'water',
+    'paane': 'water',
+    # Gas
     'sui gas': 'gas',
-    'gas': 'gas',
+    'suigas': 'gas',
+    'sui gais': 'gas',
+    # Send / transfer verbs — bhej* family
     'bhejo': 'send',
+    'bhej': 'send',
+    'bhej do': 'send',
+    'bhejdo': 'send',
+    'bhejna': 'send',
+    'bhejein': 'send',
+    'bhejiye': 'send',
+    'bhejna hai': 'send',
+    # How much / quantity
     'kitna': 'how much',
     'kitne': 'how many',
+    'ketna': 'how much',
+    'ketne': 'how many',
+    'kitnay': 'how many',
+    # Possessive
     'mere': 'my',
     'mera': 'my',
+    'mery': 'my',
+    'meri': 'my',
+    # Money / amount
     'paisa': 'money',
+    'paise': 'money',
+    'paisy': 'money',
+    'paisay': 'money',
+    'paisaa': 'money',
+    'rakam': 'amount',
+    'raqam': 'amount',
+    # Currency
     'rupay': 'rupees',
     'rupaye': 'rupees',
+    'rupaya': 'rupees',
+    'rupye': 'rupees',
+    'rupaiye': 'rupees',
+    # Account
     'khata': 'account',
+    'khaata': 'account',
+    'khatta': 'account',
+    # Reminder
     'yaad': 'reminder',
+    'yad': 'reminder',
+    'yaad dilao': 'reminder',
+    # Remaining / balance
     'baki': 'remaining',
+    'baqi': 'remaining',
+    # Action verbs
     'karo': 'do',
+    'kro': 'do',
     'karna': 'do',
+    'krna': 'do',
+    'kardo': 'do',
+    'kar do': 'do',
+    'kijiye': 'do',
+    'karein': 'do',
+    # Tell / show
     'batao': 'tell',
+    'btao': 'tell',
+    'batain': 'tell',
+    'batana': 'tell',
+    'dikhaiye': 'show',
+    'dikha': 'show',
+    'dekho': 'show',
+    'dekhain': 'show',
+    # Block / lock
     'band': 'lock',
+    'bnd': 'lock',
+    # Pay
     'ada': 'pay',
+    'adaa': 'pay',
+    'ada karo': 'pay',
+    'bharo': 'pay',
+    # Check / find out
+    'maloom': 'check',
+    'pata': 'check',
+    'pata karo': 'check',
+    'maloom karo': 'check',
+    # Transfer / send (alternative)
+    'transfer karo': 'transfer',
+    'transfer karein': 'transfer',
+    # Receipt / history
+    'raseed': 'receipt',
+    'tarikh': 'history',
+    'tarikhi': 'history',
+    # Emergency / theft
+    'chori': 'theft',
+    'churaya': 'stolen',
+    'gum': 'lost',
+    'khoya': 'lost',
+    # Utility
+    'utility': 'utility',
+    'bijli ka bill': 'electricity bill',
+    'pani ka bill': 'water bill',
+    # Greeting
+    'salam': 'hello',
+    'assalam': 'hello',
+    'aoa': 'hello',
 }
 
 RESPONSES = {
@@ -291,22 +498,22 @@ RESPONSES = {
     },
     'check_balance': {
         'en': "Your balance is RS {balance:,}",
-        'ur': "آپ کا بیلنس RS {balance:,} ہے",
+        'ur': "آپ کا بیلنس \u2066RS {balance:,}\u2069 ہے",
         'ru': "Aap ka balance RS {balance:,} hai"
     },
     'transfer_ask_amount': {
-        'en': "Aap kitni raqam transfer karna chahte hain?",
+        'en': "How much would you like to transfer?",
         'ur': "💰 آپ کتنی رقم منتقل کرنا چاہتے ہیں؟",
-        'ru': "How much would you like to transfer?"
+        'ru': "Aap kitni raqam transfer karna chahte hain?"
     },
     'transfer_ask_recipient_name': {
         'en': "👤 Who would you like to send RS {amount:,} to? Please provide their name.",
-        'ur': "👤 آپ RS {amount:,} کسے بھیجنا چاہتے ہیں؟ براۓ کرم ان کا نام فراہم کریں۔",
+        'ur': "👤 \u200Fآپ \u2066RS {amount:,}\u2069 کسے بھیجنا چاہتے ہیں؟ براۓ کرم ان کا نام فراہم کریں۔",
         'ru': "👤 Aap RS {amount:,} kise bhejna chahte hain? Unka naam provide karein."
     },
     'transfer_ask_account': {
         'en': "Please provide the account number for {recipient}.",
-        'ur': "🔢 براۓ کرم {recipient} کا اکاؤنٹ نمبر فراہم کریں۔",
+        'ur': "🔢 \u200Fبراۓ کرم \u2066{recipient}\u2069 کا اکاؤنٹ نمبر فراہم کریں۔",
         'ru': "{recipient} ka account number provide karein."
     },
     'transfer_invalid_account': {
@@ -316,17 +523,17 @@ RESPONSES = {
     },
     'transfer_confirm': {
         'en': "Confirm: sending RS {amount:,} to {recipient}, account {account_number} — yes/no?",
-        'ur': "تصدیق کریں: RS {amount:,} {recipient} کو، اکاؤنٹ {account_number} میں بھیجنا ہے — yes/no؟",
+        'ur': "\u200Fتصدیق کریں: \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو، اکاؤنٹ \u2066{account_number}\u2069 میں بھیجنا ہے — yes/no؟",
         'ru': "Confirm karein: RS {amount:,} {recipient} ko, account {account_number} mein bhejna hai — yes/no?"
     },
     'transfer_password_request': {
         'en': "🔒 Please enter your password to confirm the transfer of RS {amount:,} to {recipient}.",
-        'ur': "🔒 براۓ کرم اپنا پاس ورڈ درج کریں تاکہ {recipient} کو RS {amount:,} کی منتقلی کی تصدیق ہو سکے۔",
+        'ur': "🔒 \u200Fبراۓ کرم اپنا پاس ورڈ درج کریں تاکہ \u2066{recipient}\u2069 کو \u2066RS {amount:,}\u2069 کی منتقلی کی تصدیق ہو سکے۔",
         'ru': "🔒 Apna password enter karein taake {recipient} ko RS {amount:,} ki transfer confirm ho sake."
     },
     'transfer_success': {
         'en': "✅ Transfer successful! RS {amount:,} sent to {recipient}.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
-        'ur': "✅ ٹرانسفر کامیاب! RS {amount:,} {recipient} کو بھیجا گیا۔\n💰 نیا بیلنس: RS {balance:,}\n⭐ آپ نے {points} انعامی پوائنٹس حاصل کیے!",
+        'ur': "✅ \u200Fٹرانسفر کامیاب! \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو بھیجا گیا۔\n💰 \u200Fنیا بیلنس: \u2066RS {balance:,}\u2069\n⭐ \u200Fآپ نے \u2066{points}\u2069 انعامی پوائنٹس حاصل کیے!",
         'ru': "✅ Transfer kamyab! RS {amount:,} {recipient} ko bheja gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
     },
     'bill_ask_type': {
@@ -346,17 +553,17 @@ RESPONSES = {
     },
     'bill_confirm': {
         'en': "Confirm: paying RS {amount:,} for your {bill_type} bill (ref {account_number}) — yes/no?",
-        'ur': "تصدیق کریں: {bill_type} بل (ریف {account_number}) کے لیے RS {amount:,} ادا کرنا ہے — yes/no؟",
+        'ur': "تصدیق کریں: {bill_type} بل (ریف \u2066{account_number}\u2069) کے لیے \u2066RS {amount:,}\u2069 ادا کرنا ہے — yes/no؟",
         'ru': "Confirm karein: {bill_type} bill (ref {account_number}) ke liye RS {amount:,} pay karna hai — yes/no?"
     },
     'bill_payment_password_request': {
         'en': "🔒 Please enter your password to confirm the {bill_type} bill payment of RS {amount:,}.",
-        'ur': "🔒 براۓ کرم اپنا پاس ورڈ درج کریں تاکہ {bill_type} بل RS {amount:,} کی ادائیگی کی تصدیق ہو سکے۔",
+        'ur': "🔒 براۓ کرم اپنا پاس ورڈ درج کریں تاکہ {bill_type} بل \u2066RS {amount:,}\u2069 کی ادائیگی کی تصدیق ہو سکے۔",
         'ru': "🔒 Apna password enter karein taake {bill_type} bill RS {amount:,} ki payment confirm ho sake."
     },
     'bill_payment_success': {
         'en': "✅ Bill payment successful! {bill_type} bill of RS {amount:,} paid.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
-        'ur': "✅ بل ادائیگی کامیاب! {bill_type} بل RS {amount:,} ادا کیا گیا۔\n💰 نیا بیلنس: RS {balance:,}\n⭐ آپ نے {points} انعامی پوائنٹس حاصل کیے!",
+        'ur': "✅ بل ادائیگی کامیاب! {bill_type} بل \u2066RS {amount:,}\u2069 ادا کیا گیا۔\n💰 نیا بیلنس: \u2066RS {balance:,}\u2069\n⭐ آپ نے \u2066{points}\u2069 انعامی پوائنٹس حاصل کیے!",
         'ru': "✅ Bill payment kamyab! {bill_type} bill RS {amount:,} ada kiya gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
     },
     'check_rewards': {
@@ -371,7 +578,7 @@ RESPONSES = {
     },
     'redeem_success': {
         'en': "✅ Redemption successful! {points_used} points redeemed for RS {reward_value}.\n💰 New balance: RS {balance:,}\n⭐ Remaining points: {remaining_points}",
-        'ur': "✅ ریڈیمپشن کامیاب! {points_used} پوائنٹس RS {reward_value} کے لیے استعمال کیے گئے۔\n💰 نیا بیلنس: RS {balance:,}\n⭐ باقی پوائنٹس: {remaining_points}",
+        'ur': "✅ ریڈیمپشن کامیاب! \u2066{points_used}\u2069 پوائنٹس \u2066RS {reward_value}\u2069 کے لیے استعمال کیے گئے۔\n💰 نیا بیلنس: \u2066RS {balance:,}\u2069\n⭐ باقی پوائنٹس: \u2066{remaining_points}\u2069",
         'ru': "✅ Redemption kamyab! {points_used} points RS {reward_value} ke liye use kiye gaye.\n💰 Naya balance: RS {balance:,}\n⭐ Baqi points: {remaining_points}"
     },
     'bill_reminders': {
@@ -396,7 +603,7 @@ RESPONSES = {
     },
     'emergency_password_incorrect': {
         'en': "❌ Incorrect password. You have {attempts} attempt(s) remaining. Please try again.",
-        'ur': "❌ غلط پاس ورڈ۔ آپ کے پاس {attempts} کوشش(یں) باقی ہیں۔ براۓ کرم دوبارہ کوشش کریں۔",
+        'ur': "❌ غلط پاس ورڈ۔ آپ کے پاس \u2066{attempts}\u2069 کوشش(یں) باقی ہیں۔ براۓ کرم دوبارہ کوشش کریں۔",
         'ru': "❌ Ghalat password. Aap ke paas {attempts} koshish(ain) baqi hain. Dobara koshish karein."
     },
     'emergency_failed': {
@@ -416,12 +623,12 @@ RESPONSES = {
     },
     'insufficient_funds': {
         'en': "❌ Insufficient funds. Your balance is RS {balance:,}.",
-        'ur': "❌ ناکافی فنڈز۔ آپ کا بیلنس RS {balance:,} ہے۔",
+        'ur': "❌ ناکافی فنڈز۔ آپ کا بیلنس \u2066RS {balance:,}\u2069 ہے۔",
         'ru': "❌ Nakafi funds. Aap ka balance RS {balance:,} hai."
     },
     'insufficient_points': {
         'en': "❌ Insufficient points. You have {points} points but need {required} points.",
-        'ur': "❌ ناکافی پوائنٹس۔ آپ کے پاس {points} پوائنٹس ہیں لیکن {required} پوائنٹس کی ضرورت ہے۔",
+        'ur': "❌ ناکافی پوائنٹس۔ آپ کے پاس \u2066{points}\u2069 پوائنٹس ہیں لیکن \u2066{required}\u2069 پوائنٹس کی ضرورت ہے۔",
         'ru': "❌ Nakafi points. Aap ke paas {points} points hain lekin {required} points ki zaroorat hai."
     },
     'human_handoff': {
@@ -545,46 +752,400 @@ RESPONSES = {
 
 
 def detect_language(text: str) -> str:
-    """Detect language: 'ur' (Urdu), 'ru' (Roman Urdu), 'en' (English)"""
+    """Detect language: 'ur' (Urdu script), 'ru' (Roman Urdu), 'en' (English).
+
+    Uses \b word-boundary matching instead of naive substring
+    containment so short common English substrings ('se', 'ko', 'ka', 'ada')
+    embedded inside longer English words no longer trigger false 'ru'
+    classifications.  E.g. "Karachi", "send", "service", "use" are now safe.
+    """
+    # Urdu script wins immediately if any Arabic-block code-point is present.
     if any('\u0600' <= c <= '\u06FF' for c in text):
         return 'ur'
 
-    roman_words = ['aap', 'main', 'hai', 'hoon', 'kya', 'bhejo', 'kitna', 'kitne',
-                   'mere', 'mera', 'karo', 'karna', 'batao', 'dijiye', 'chahta',
-                   'chahte', 'chahiye', 'bijli', 'bjili', 'pani', 'paisa', 'rupay',
-                   'khata', 'yaad', 'baki', 'band', 'ada', 'se', 'ko', 'ka']
-    if any(w in text.lower() for w in roman_words):
+    # Word list; each entry is checked as a complete token.
+    roman_words = [
+        'aap', 'main', 'hai', 'hain', 'hoon', 'kya', 'bhejo', 'bhejdo', 'bhejna',
+        'kitna', 'kitne', 'kitnay', 'ketna', 'ketne',
+        'mere', 'mera', 'mery', 'meri', 'mujhe', 'mujhay', 'humein', 'hamein',
+        'karo', 'kro', 'karna', 'krna', 'kardo', 'karein', 'kijiye',
+        'batao', 'btao', 'batain', 'batana', 'dikhaiye',
+        'dijiye', 'chahta', 'chahte', 'chahiye',
+        'bijli', 'bjili', 'bijlee', 'bijly',
+        'pani', 'paani', 'paisa', 'paise', 'paisay',
+        'rupay', 'rupaye', 'rupaya', 'rupye',
+        'rakam', 'raqam',
+        'khata', 'khaata', 'khatta',
+        'yaad', 'yad', 'baki', 'baqi',
+        'maloom', 'raseed', 'tarikh',
+        'chori', 'gum', 'khoya',
+        'lain', 'dain', 'len', 'den',
+        'shukriya', 'salam', 'assalam',
+        'nahi', 'nai', 'haan', 'ji',
+        'theek', 'galat', 'sahi',
+        'pichle', 'pichli', 'agla',
+        'bhej',  # short, but only matched as full token now
+    ]
+    text_lower = text.lower()
+    if any(re.search(r'\b' + re.escape(w) + r'\b', text_lower) for w in roman_words):
         return 'ru'
 
     return 'en'
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Language stickiness helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Minimum token count of a new-language signal required to override the locked
+# session_language.  Must be a real sentence in a completely different language.
+_LANG_OVERRIDE_MIN_TOKENS = 5
+
+# Short/ambiguous patterns that must NEVER trigger a language override.
+# These cover: bare numbers, currency amounts, one-word yes/no/confirmations,
+# account numbers, reference numbers, and any other pure slot-fill that
+# contains no reliable language signal.
+_AMBIGUOUS_REPLY_PATTERNS = [
+    # Pure numbers or numbers with currency suffixes
+    r'^\s*\d[\d\s,\.]*(\s*(rs\.?|pkr|rupees?|lakh|crore|روپے|روپیہ))?\s*$',
+    # One-word yes/no/confirmations in any language
+    r'^\s*(ok|okay|yes|no|y|n|haan|nahi|ji|theek|sahi|galat|confirm|proceed|ha|nope)\s*$',
+    # Single digit (redemption choice)
+    r'^\s*[1-9]\s*$',
+    # Pure alphanumeric (account numbers, reference numbers)
+    r'^\s*[A-Z0-9]{4,20}\s*$',
+    # Indic-digit only input (Eastern Arabic numerals)
+    r'^[\s۰-۹,\.]+$',
+    # Short mixed currency: "5000 rs", "pkr 3000", "rs 2500"
+    r'^\s*(rs\.?\s*)?\d[\d,\.]*(\s*(rs\.?|pkr|rupees?))?\s*$',
+]
+
+# Words/tokens that are ONLY meaningful as slot-fillers and carry zero
+# language signal — used to detect "entire message is slot-fill content"
+_SLOT_FILL_ONLY_TOKENS = frozenset([
+    # affirmatives/negatives
+    'yes', 'no', 'ok', 'okay', 'haan', 'nahi', 'ji', 'theek', 'sahi',
+    'galat', 'confirm', 'proceed', 'ha', 'nope', 'yep', 'yeah',
+    # currency
+    'rs', 'pkr', 'rupees', 'rupee', 'rupay', 'rupaye',
+    # account/reference label words
+    'account', 'number', 'ref', 'no', 'acc',
+])
+
+
+def _is_ambiguous_reply(text: str) -> bool:
+    """Return True if *text* is a slot-fill that carries no reliable language
+    signal: raw numbers, currency amounts, yes/no, account numbers, etc."""
+    t = text.strip()
+    if not t:
+        return True
+    # Pattern-level check
+    if any(re.search(p, t, re.IGNORECASE) for p in _AMBIGUOUS_REPLY_PATTERNS):
+        return True
+    # Token-level check: if every meaningful token is either a digit or a
+    # known slot-fill-only word, the message has no language signal
+    tokens = [tok.lower() for tok in re.split(r'\s+', t) if tok]
+    if not tokens:
+        return True
+    meaningful = [tok for tok in tokens
+                  if tok not in _SLOT_FILL_ONLY_TOKENS and not re.match(r'^[\d,\.]+$', tok)]
+    # If there are no meaningful tokens at all → ambiguous
+    if not meaningful:
+        return True
+    # If the ONLY meaningful tokens are a single Urdu/RU word already known
+    # to be a confirmation (haan, ji, theek, etc.) → ambiguous
+    if len(meaningful) == 1 and meaningful[0] in {'haan', 'nahi', 'ji', 'theek', 'sahi', 'galat'}:
+        return True
+    return False
+
+
+def resolve_language(user_message: str, ctx: Dict) -> str:
+    """Return the effective language for this turn.
+
+    Rules (in order of priority):
+    1. Urdu script code-point → always 'ur', immediately, no threshold needed.
+    2. No lock yet → detect fresh.
+    3. A flow is currently active (we're mid-transfer / mid-bill-payment /
+       mid-redemption, collecting slots) → the lock is authoritative,
+       full stop. A slot answer is data, not a fresh language signal -
+       it doesn't matter whether the amount, account number, recipient
+       name, or confirmation is typed in English, Roman Urdu, or Urdu
+       script, the conversation keeps speaking whatever language it
+       started in until the flow finishes or is cancelled.
+    4. No active flow (back at the top level) AND the message is an
+       ambiguous slot-fill (number, yes/no, account ref) → retain lock.
+    5. No active flow AND the new message is in a DIFFERENT language
+       with >= _LANG_OVERRIDE_MIN_TOKENS meaningful tokens → genuine
+       language switch, override the lock.
+    """
+    # Step 1: Urdu script wins unconditionally — no threshold, no lock needed.
+    if any('\u0600' <= c <= '\u06FF' for c in user_message):
+        return 'ur'
+
+    locked = ctx.get('session_language')
+
+    # Step 2: No lock → just detect.
+    if locked is None:
+        return detect_language(user_message)
+
+    # Step 3: Active flow → lock is final, regardless of what language the
+    # slot answer happens to be written in.
+    if ctx.get('current_flow'):
+        return locked
+
+    # Step 4: Idle / top-level, but the message itself carries no reliable
+    # language signal (bare number, yes/no, account ref) → retain lock.
+    if _is_ambiguous_reply(user_message):
+        return locked
+
+    # Step 5: Idle / top-level, genuine new instruction → may switch.
+    detected = detect_language(user_message)
+    if detected != locked:
+        tokens = [t for t in re.split(r'\s+', user_message.strip()) if t]
+        if len(tokens) < _LANG_OVERRIDE_MIN_TOKENS:
+            return locked
+        return detected
+
+    return locked
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phonetic bucket normalizer
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Groups of orthographic/phonetic variants that map to the same canonical form.
+# Used by the fuzzy slang matcher and the normalization pipeline.
+PHONETIC_BUCKETS: Dict[str, List[str]] = {
+    'electricity': ['bijli', 'bijly', 'bijlee', 'bijaly', 'bjili', 'bijlee'],
+    'water':       ['pani', 'paani', 'paane'],
+    'gas':         ['sui gas', 'suigas', 'sui gais', 'gas'],
+    'send':        ['bhejo', 'bhej', 'bhej do', 'bhejdo', 'bhejna', 'bhejein', 'bhejiye'],
+    'money':       ['paisa', 'paise', 'paisay', 'paisaa'],
+    'account':     ['khata', 'khaata', 'khatta'],
+    'amount':      ['rakam', 'raqam'],
+    'rupees':      ['rupay', 'rupaye', 'rupaya', 'rupye', 'rupaiye'],
+    'reminder':    ['yaad', 'yad'],
+    'remaining':   ['baki', 'baqi'],
+    'receipt':     ['raseed'],
+    'history':     ['tarikh', 'tarikhi'],
+}
+
+# Inverted index: variant → canonical
+_PHONETIC_CANONICAL: Dict[str, str] = {
+    variant: canonical
+    for canonical, variants in PHONETIC_BUCKETS.items()
+    for variant in variants
+}
+
+
+def normalize_to_phonetic_bucket(word: str) -> str:
+    """Return the canonical bucket form for *word*, or *word* unchanged."""
+    return _PHONETIC_CANONICAL.get(word.lower(), word)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Edit-distance <= 1 fuzzy slang helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _edit_distance_one(a: str, b: str) -> bool:
+    """Return True if Levenshtein distance between *a* and *b* is ≤ 1."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    # substitution / transposition on equal-length strings
+    if la == lb:
+        diffs = sum(ca != cb for ca, cb in zip(a, b))
+        return diffs <= 1
+    # one insertion / deletion
+    short, long_ = (a, b) if la < lb else (b, a)
+    i = j = 0
+    found_diff = False
+    while i < len(short) and j < len(long_):
+        if short[i] != long_[j]:
+            if found_diff:
+                return False
+            found_diff = True
+            j += 1
+        else:
+            i += 1
+            j += 1
+    return True
+
+
+def fuzzy_slang_lookup(token: str) -> Optional[str]:
+    """Return the canonical slang mapping for *token*, using an exact match
+    first, then edit-distance ≤ 1 fallback against SLANG_MAPPING keys."""
+    t = token.lower()
+    if t in SLANG_MAPPING:
+        return SLANG_MAPPING[t]
+    # Edit-distance ≤ 1 among single-word keys only (skip multi-word phrases
+    # to avoid false positives on short tokens).
+    for key in SLANG_MAPPING:
+        if ' ' not in key and _edit_distance_one(t, key):
+            return SLANG_MAPPING[key]
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-token language tagger
+# ─────────────────────────────────────────────────────────────────────────────
+
+# English-only word list used by the per-token tagger (very light, no NLTK).
+_EN_COMMON = frozenset([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'on',
+    'at', 'for', 'with', 'by', 'from', 'into', 'through', 'about',
+    'send', 'transfer', 'pay', 'check', 'show', 'balance', 'account',
+    'money', 'bill', 'electricity', 'water', 'gas', 'internet',
+    'history', 'statement', 'reward', 'points', 'redeem', 'block',
+    'card', 'lock', 'emergency', 'human', 'agent', 'person', 'help',
+    'yes', 'no', 'ok', 'okay', 'cancel', 'stop', 'proceed', 'confirm',
+])
+
+_RU_VOCAB = frozenset(SLANG_MAPPING.keys()) | frozenset([
+    'aap', 'main', 'hai', 'hoon', 'kya', 'mere', 'mera', 'mery', 'meri',
+    'karo', 'karna', 'batao', 'dijiye', 'chahta', 'chahte', 'chahiye',
+    'nahi', 'haan', 'ji', 'theek', 'galat', 'sahi',
+])
+
+
+def tag_tokens(text: str) -> List[Tuple[str, str]]:
+    """Tag each whitespace-separated token with 'en', 'ur-script', or 'ru'.
+
+    Returns a list of (token, tag) tuples.  Tokens that can't be classified
+    confidently default to 'en'.  The tagger is intentionally lightweight —
+    it never blocks entity extraction on ambiguous tokens.
+    """
+    tokens = text.split()
+    result: List[Tuple[str, str]] = []
+    for tok in tokens:
+        if any('\u0600' <= c <= '\u06FF' for c in tok):
+            result.append((tok, 'ur-script'))
+        elif tok.lower() in _RU_VOCAB:
+            result.append((tok, 'ru'))
+        elif tok.lower() in _EN_COMMON or tok.isdigit():
+            result.append((tok, 'en'))
+        else:
+            result.append((tok, 'en'))   # safe default
+    return result
+
+
+def dominant_language_from_tags(tags: List[Tuple[str, str]]) -> str:
+    """Return the most frequent language tag from a tagged-token list,
+    falling back to 'en' on a tie."""
+    if not tags:
+        return 'en'
+    counts: Dict[str, int] = {}
+    for _, lang in tags:
+        counts[lang] = counts.get(lang, 0) + 1
+    return max(counts, key=lambda k: (counts[k], k == 'ru'))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Normalization pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EASTERN_ARABIC_DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
+
+# Unicode diacritic categories to strip on the *matching* copy only.
+_DIACRITIC_CATEGORIES = frozenset(['Mn', 'Mc', 'Me'])
+
+
+def _strip_diacritics(text: str) -> str:
+    """Strip combining diacritical marks (e.g. Urdu harakat) from *text*."""
+    return ''.join(c for c in unicodedata.normalize('NFD', text)
+                   if unicodedata.category(c) not in _DIACRITIC_CATEGORIES)
+
+
+def normalize_for_matching(text: str) -> str:
+    """Full normalization pipeline for INTENT DETECTION / CLASSIFICATION.
+
+    Pipeline:
+    1. NFKC normalisation.
+    2. Diacritic stripping (matching copy only).
+    3. Whitespace & punctuation normalisation.
+    4. Eastern Arabic-Indic digit → ASCII digit.
+    5. Case folding.
+    6. Slang / phonetic mapping.
+
+    CRITICAL: This function MUST NOT be used as the input to entity extractors
+    (names, account numbers, amounts).  Those extractors receive the minimally
+    processed text produced by normalize_for_entity_extraction() below.
+    """
+    # Step 1: NFKC
+    text = unicodedata.normalize('NFKC', text)
+    # Step 2: diacritics (matching copy)
+    text = _strip_diacritics(text)
+    # Step 3: whitespace + punctuation
+    text = re.sub(r'[^\w\s\u0600-\u06FF]', ' ', text)   # keep word chars + Urdu block
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Step 4: Eastern Arabic-Indic digits
+    text = text.translate(_EASTERN_ARABIC_DIGITS)
+    # Step 5: case fold
+    text = text.lower()
+    # Step 6: slang / phonetic substitution
+    #   Sort by key length descending so multi-word phrases win over their
+    #   constituent single words.
+    for slang_key in sorted(SLANG_MAPPING, key=len, reverse=True):
+        text = re.sub(r'\b' + re.escape(slang_key) + r'\b', SLANG_MAPPING[slang_key], text)
+    return text
+
+
+def normalize_for_entity_extraction(text: str) -> str:
+    """Minimal normalisation safe for entity extraction.
+
+    ONLY applies:
+    • NFKC normalisation.
+    • Eastern Arabic-Indic → ASCII digit conversion.
+    • Collapsing of redundant whitespace.
+
+    Critically, NO slang substitution is applied, so a recipient named "Ada"
+    or an account label containing a common word is never corrupted.
+    """
+    text = unicodedata.normalize('NFKC', text)
+    text = text.translate(_EASTERN_ARABIC_DIGITS)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def normalize_slang(text: str) -> str:
-    """Convert slang to standard form"""
-    text_lower = text.lower()
-    for slang, standard in SLANG_MAPPING.items():
-        text_lower = re.sub(r'\b' + slang + r'\b', standard, text_lower)
-    return text_lower
+    """Convert slang to standard form.
+
+    Backward-compatible wrapper around the new normalize_for_matching()
+    pipeline.  All internal callers that do intent/pattern matching already
+    used this function, so they automatically gain the full Day-3 pipeline.
+    Entity extractors call normalize_for_entity_extraction() directly.
+    """
+    return normalize_for_matching(text)
 
 
 def extract_amount(text: str) -> Optional[int]:
     """
-    Extract amount from text.
+    Extract amount from text. Handles Eastern Arabic-Indic digits (۰-۹),
+    South-Asian lakh/crore comma groupings, and currency markers.
 
     Notes on the parsing rules below:
-    - EC-2: the numeric token accepts South-Asian lakh/crore digit
+    - Eastern Arabic-Indic digits are converted to ASCII first so
+      ۵۰۰۰ is correctly parsed as 5000.
+    - The numeric token accepts South-Asian lakh/crore digit
       groupings (e.g. "5,00,000") in addition to standard thousands
       groupings (e.g. "500,000") - any comma grouping is accepted and
       simply stripped before parsing.
-    - EC-1: currency-marked amounts (Rs./PKR/rupees) are always preferred
+    - Currency-marked amounts (Rs./PKR/rupees) are always preferred
       over bare numbers. If no currency marker is present and multiple
       bare numbers exist (e.g. "I have 2 accounts, send 5000"), the
       largest value is used instead of blindly taking the leftmost match,
       since incidental context numbers are typically small relative to
       the actual transaction amount.
-    - EC-3: decimals are preserved through float conversion rather than
+    - Decimals are preserved through float conversion rather than
       being stripped, so "100.50" never mutates into "10050".
     """
+    # Normalise Indic digits before any pattern matching
+    text = text.translate(_EASTERN_ARABIC_DIGITS)
+
     number_token = r'\d+(?:,\d+)*(?:\.\d+)?'
 
     currency_patterns = [
@@ -592,6 +1153,7 @@ def extract_amount(text: str) -> Optional[int]:
         r'pkr\s*(' + number_token + r')',
         r'(' + number_token + r')\s*rs\.?\b',
         r'(' + number_token + r')\s*rupees',
+        r'(' + number_token + r')\s*(?:rupay|rupaye|rupaya|rupye)\b',
     ]
 
     for pattern in currency_patterns:
@@ -612,40 +1174,61 @@ def extract_recipient_name(text: str) -> Optional[str]:
     """
     Extract recipient name from text.
 
-    EC-8: the excluded-words list covers common English + Roman-Urdu
+    The excluded-words list covers common English + Roman-Urdu
     imperative slang verbs (including multi-word phrases like "bhej do")
     so they don't get captured as part of the name.
-    EC-9: the final candidate is sanity-checked - it must be non-empty,
+    The final candidate is sanity-checked - it must be non-empty,
     contain at least one alphabetic character, and not be composed
     entirely of digits/special characters. If it fails, return None so
     the caller can flag it as unparsed instead of silently corrupting it.
+    A candidate that still contains a digit, a comma, or more than
+    three words after the known-verb strip is treated as a full sentence
+    (e.g. a fresh instruction like "usko 120 send kardo" or a cancel
+    phrase like "ruko, usko 120 send kardo") rather than a bare name, and
+    rejected - a real name doesn't normally contain numbers or commas.
+    Urdu-script tokens and currency/amount words are excluded
+    so روپے/بھیجو/رقم never become recipient names.
+    Trailing particles like "hai", "ko", "ka" are stripped.
     """
     text = text.strip()
     if not text:
         return None
 
-    excluded = [
+    # Reject immediately if the entire input is Urdu script — it's an
+    # instruction, not a name.
+    if any('\u0600' <= c <= '\u06FF' for c in text) and not any(c.isascii() and c.isalpha() for c in text):
+        return None
+
+    excluded_words = [
         'to', 'send', 'transfer', 'pay', 'bhejo', 'karo', 'ko', 'bhej',
-        'bhejdo', 'bhej do', 'bhejna', 'kardo'
+        'bhejdo', 'bhej do', 'bhejna', 'kardo', 'usko', 'unko', 'ise',
+        'isko', 'do', 'hai', 'hain', 'ka', 'ki', 'ke', 'mein', 'se',
+        # currency words that should NEVER be names
+        'rs', 'pkr', 'rupees', 'rupee', 'rupay', 'rupaye', 'rupaya',
+        'money', 'paisa', 'paise', 'paisay', 'rakam', 'raqam',
+        # verb variants
+        'bhejiye', 'bhejein', 'transfer', 'karna', 'karein', 'kijiye',
     ]
 
     working_text = text
-    multi_word = sorted([p for p in excluded if ' ' in p], key=len, reverse=True)
+    multi_word = sorted([p for p in excluded_words if ' ' in p], key=len, reverse=True)
     for phrase in multi_word:
         working_text = re.sub(
             r'\b' + re.escape(phrase) + r'\b', '', working_text, flags=re.IGNORECASE
         )
 
-    single_word_excluded = {p.lower() for p in excluded if ' ' not in p}
-    name_words = [w for w in working_text.split() if w.lower() not in single_word_excluded]
+    single_word_excluded = {p.lower() for p in excluded_words if ' ' not in p}
 
-    if name_words:
-        candidate = ' '.join(w.capitalize() for w in name_words)
-    else:
-        candidate = working_text.strip().title() if working_text.strip() else None
+    # Also exclude any Urdu-script token (they are verbs/particles, not names)
+    name_words = [
+        w for w in working_text.split()
+        if w.lower() not in single_word_excluded
+        and not any('\u0600' <= c <= '\u06FF' for c in w)
+    ]
 
-    if not candidate:
+    if not name_words:
         return None
+    candidate = ' '.join(w.capitalize() for w in name_words)
 
     stripped_candidate = candidate.replace(' ', '')
     if not stripped_candidate:
@@ -653,14 +1236,55 @@ def extract_recipient_name(text: str) -> Optional[str]:
     if not any(c.isalpha() for c in stripped_candidate):
         return None
 
+    # Reject anything that still looks like a sentence rather than
+    # a bare name once the known filler/verb words are gone.
+    if any(c.isdigit() for c in candidate):
+        return None
+    if ',' in text:
+        return None
+    if len(candidate.split()) > 3:
+        return None
+
+    # Final safety: reject if the candidate is a known Urdu/RU function word
+    _name_blocklist = {
+        'hai', 'hain', 'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'aur',
+        'ya', 'bhi', 'hi', 'toh', 'par', 'pe', 'woh', 'yeh', 'main',
+        'aap', 'hum', 'tum', 'rupay', 'rupaye', 'rupaya', 'paisa',
+        'paise', 'rakam', 'raqam', 'bhejo', 'bhej', 'bhejna', 'karo',
+        'electricity', 'gas', 'water', 'internet', 'bill',
+    }
+    if candidate.lower() in _name_blocklist:
+        return None
+
     return candidate
 
 
 def validate_account_number(text: str) -> Optional[str]:
-    """Validate account number - must be mix of letters and numbers"""
+    """
+    Validate account number - must be mix of letters and numbers.
+
+    Before stripping spaces, reject anything that reads like a full
+    sentence/new instruction (e.g. "mobni ko 300 send kardo") rather than
+    a bare account number - account numbers are typed as a single token,
+    optionally preceded by a label like "account number". A message that
+    still contains a known instruction verb after the label words are
+    removed is treated as a fresh instruction and rejected, instead of
+    being silently accepted as gibberish "account number" once spaces are
+    stripped out.
+    """
+    raw = text.strip().lower()
+    instruction_verbs = [
+        'send', 'transfer', 'pay', 'bhejo', 'bhej', 'bhejdo', 'bhejna',
+        'kardo', 'karo', 'karna',
+    ]
+    label_words = {'account', 'number', 'acc', 'no', 'ko', 'to', 'for'}
+    remaining_words = [w for w in re.split(r'\s+', raw) if w and w not in label_words]
+    if any(verb in remaining_words for verb in instruction_verbs) and len(remaining_words) > 1:
+        return None
+
     text = text.strip().upper()
 
-    # EC-7: word-boundary anchored regex instead of destructive substring
+    # Word-boundary anchored regex instead of destructive substring
     # .replace() so identifiers like "NOOR123456" never get mangled into
     # "OOR123456" by an incidental "NO" match.
     text = re.sub(r'\b(ACCOUNT|NUMBER|ACC|NO)\b', '', text)
@@ -703,14 +1327,50 @@ def extract_bill_type(text: str) -> Optional[str]:
 
 
 def extract_bill_reference(text: str) -> Optional[str]:
-    """Extract bill reference number - accept anything reasonable"""
-    text = text.strip()
+    """Extract bill reference number — accepts anything reasonable.
 
-    excluded = ['bill', 'reference', 'number', 'ref', 'no', 'account']
+    Eastern Arabic-Indic digits are translated to ASCII first,
+    before the cleanup regex runs, so native-digit reference numbers are
+    never silently stripped.
+
+    Strip common Urdu and English label/filler phrases before
+    collapsing to alphanumeric, so "mera reference number hay ABC13346"
+    yields "ABC13346" and not "MERAHAYABC13346".
+    """
+    text = text.strip()
+    # Normalise Indic digits before any further processing.
+    text = text.translate(_EASTERN_ARABIC_DIGITS)
+
+    # Strip common label/filler words (English AND Urdu/Roman Urdu).
+    # Order matters: strip multi-word phrases before single words.
+    label_phrases = [
+        r'\bmera\s+reference\s+number\s+hai\b',
+        r'\bmera\s+reference\s+number\s+hay\b',
+        r'\bmera\s+reference\s+hai\b',
+        r'\breference\s+number\s+hai\b',
+        r'\breference\s+number\s+hay\b',
+        r'\bref\s+no\b',
+        r'\bref\s+number\b',
+        r'\bmy\s+reference\s+(?:number\s+)?is\b',
+        r'\bmy\s+ref\b',
+    ]
+    for phrase in label_phrases:
+        text = re.sub(phrase, '', text, flags=re.IGNORECASE)
+
+    # Single label words
+    excluded = ['bill', 'reference', 'number', 'ref', 'no', 'account',
+                'mera', 'hay', 'hai', 'hain', 'ka', 'ki', 'ke', 'yeh', 'is', 'my']
     for word in excluded:
-        text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b' + re.escape(word) + r'\b', '', text, flags=re.IGNORECASE)
 
-    text = text.strip()
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Try to isolate a clean alphanumeric reference token first
+    # (look for a contiguous block of letters+digits, 4–20 chars)
+    tokens = re.findall(r'[A-Z0-9]{4,20}', text.upper())
+    if tokens:
+        # Prefer the longest token (most likely to be the actual reference)
+        return max(tokens, key=len)
 
     cleaned = re.sub(r'[^A-Z0-9]', '', text.upper())
     if 4 <= len(cleaned) <= 20:
@@ -726,7 +1386,7 @@ def extract_redemption_choice(text: str) -> Optional[int]:
     """
     Extract redemption choice from text.
 
-    EC-6: standalone option numbers are matched with negative lookaround so
+    Standalone option numbers are matched with negative lookaround so
     they can't match inside a longer digit run (e.g. "1500 points" no
     longer wrongly maps to Option 1 just because it contains the digit
     '1'). Explicit reward values / ordinal words are checked first since
@@ -755,16 +1415,22 @@ def extract_redemption_choice(text: str) -> Optional[int]:
 def extract_recipient_name_for_transfer_followup(text: str) -> Optional[str]:
     """
     Same as extract_recipient_name, but additionally rejects a small
-    leftover-keyword set (transfer verbs / currency words) that
-    extract_recipient_name's title-casing fallback could otherwise
-    misread as a name when called on a full free-form message like
-    "send 5000 to Ahmed" with the amount substring stripped out first.
-    EC-1/EC-8 behavior, matching the top-level transfer_money entry point.
+    leftover-keyword set (transfer verbs / currency words / generic role
+    words) that extract_recipient_name's title-casing fallback could
+    otherwise misread as a name when called on a full free-form message.
+    Matches the behavior of the top-level transfer_money entry point.
+    "colleague", "friend", "person", "someone" etc. are generic
+    role descriptions, not names — reject them here.
     """
-    recipient = extract_recipient_name(text)
+    recipient = extract_recipient_name(strip_amount_substring(text))
     leftover_keywords = {
         'send', 'transfer', 'pay', 'rs', 'pkr', 'rupees',
-        'rupee', 'money', 'payment', 'paisa'
+        'rupee', 'money', 'payment', 'paisa', 'paise',
+        # generic role/relationship words — not actual names
+        'colleague', 'friend', 'someone', 'person', 'him', 'her',
+        'them', 'it', 'he', 'she', 'they', 'anyone', 'somebody',
+        'relative', 'brother', 'sister', 'mother', 'father', 'uncle',
+        'aunt', 'wife', 'husband', 'partner', 'boss', 'employee',
     }
     if recipient and recipient.lower() in leftover_keywords:
         return None
@@ -861,10 +1527,10 @@ def check_global_controls(user_message: str, ctx: Dict) -> Optional[Dict]:
     handling.
 
     Order of precedence (most disruptive first):
-      1. Emergency pre-emption (SEC-6) - card-block always wins, even
+      1. Emergency pre-emption - card-block always wins, even
          mid-flow, and the interrupted flow's state is preserved so it can
          be resumed later.
-      2. Global cancel (SEC-3) - wipes the active transaction context and
+      2. Global cancel - wipes the active transaction context and
          confirms exactly what was cancelled.
       3. Contextual help - answered relative to ctx['current_flow'].
 
@@ -880,10 +1546,11 @@ def check_global_controls(user_message: str, ctx: Dict) -> Optional[Dict]:
         ctx.get('awaiting_password') or ctx.get('awaiting_emergency_password')
     )
 
-    language = detect_language(user_message)
+    # Use the session-locked language for all interceptor responses.
+    language = resolve_language(user_message, ctx)
     normalized = normalize_slang(user_message)
 
-    # --- 1. Emergency pre-emption (SEC-6) ---------------------------------
+    # --- 1. Emergency pre-emption ----------------------------------------
     if _matches_any(normalized, INTENT_PATTERNS['emergency']):
         suspended_state = None
         suspended_flow = ctx.get('current_flow')
@@ -917,7 +1584,7 @@ def check_global_controls(user_message: str, ctx: Dict) -> Optional[Dict]:
     if awaiting_raw_password:
         return None
 
-    # --- 2. Global cancel (SEC-3) -----------------------------------------
+    # --- 2. Global cancel -------------------------------------------------
     if _matches_any(normalized, CANCEL_PATTERNS):
         current_flow = ctx.get('current_flow')
         cancel_key_map = {
@@ -1018,7 +1685,7 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
     if not _matches_any(normalized, EDIT_PREVIOUS_PATTERNS):
         return None
 
-    language = detect_language(user_message)
+    language = resolve_language(user_message, ctx)
     slot_order = FLOW_SLOT_ORDER[current_flow]
 
     # Find the most recently filled slot: walk the slot order and take the
@@ -1053,10 +1720,22 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
     # these aren't extraction triggers themselves, just noise around the
     # actual new value.
     stripped_text = normalized
-    for pattern in EDIT_PREVIOUS_PATTERNS:
-        stripped_text = re.sub(pattern, ' ', stripped_text, flags=re.IGNORECASE)
-    for filler in (r"\bmake\s*it\b", r"\bit'?s\b", r"\bit\s*is\b"):
-        stripped_text = re.sub(filler, ' ', stripped_text, flags=re.IGNORECASE)
+    all_strip_patterns = list(EDIT_PREVIOUS_PATTERNS) + [
+        r"\bmake\s*it\b", r"\bit'?s\b", r"\bit\s*is\b", r"\bsorry\b",
+    ]
+    # Run to a fixed point: some patterns are substrings of others (e.g.
+    # "i meant" inside "sorry i meant"), so a single pass can leave a
+    # stray leftover word if the shorter pattern consumes part of what a
+    # longer pattern further down the list was meant to match as a whole.
+    for _ in range(3):
+        changed = False
+        for pattern in all_strip_patterns:
+            new_stripped = re.sub(pattern, ' ', stripped_text, flags=re.IGNORECASE)
+            if new_stripped != stripped_text:
+                changed = True
+            stripped_text = new_stripped
+        if not changed:
+            break
     stripped_text = stripped_text.strip()
 
     new_value = None
@@ -1220,6 +1899,11 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
     slot_order = FLOW_SLOT_ORDER[current_flow]
     slots = FLOW_SLOTS[current_flow]
     normalized = normalize_slang(user_message) if user_message else "[INLINE_EDIT]"
+    # The effective session language is whatever is locked in ctx,
+    # falling back to the language argument (which is the detected language
+    # on this turn).  This ensures every response from run_flow_step is
+    # already in the locked language without the caller needing to patch it.
+    effective_language = ctx.get('session_language') or language
 
     # Find the first not-yet-filled slot.
     target_slot = None
@@ -1233,11 +1917,12 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         new_ctx = dict(ctx)
         new_ctx['current_flow'] = current_flow
         new_ctx['flow_state'] = FLOW_CONFIRMATION_STATE[current_flow].name
-        ai_response = _render_confirmation_prompt(current_flow, new_ctx, language)
+        ai_response = _render_confirmation_prompt(current_flow, new_ctx, effective_language)
 
         result = {
             'intent': current_flow,
-            'language': language,
+            'language': effective_language,
+            'session_language': ctx.get('session_language', language),
             'entities': {k: new_ctx[k] for k in slot_order},
             'needs_clarification': True,
             'clarification_type': 'confirmation_required',
@@ -1270,10 +1955,12 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         extracted = None
 
     # Special-case the very first slot of transfer_money: try to also pull
-    # the recipient out of the same message (EC-1/EC-8 behavior preserved).
+    # the recipient out of the same message.
     if (current_flow == 'transfer_money' and target_slot == 'amount'
             and extracted is not None):
-        return _start_transfer_with_amount(user_message, extracted, language)
+        result = _start_transfer_with_amount(user_message, extracted, effective_language)
+        result['session_language'] = ctx.get('session_language', language)
+        return result
 
     if slot_def.validator and extracted is not None and not slot_def.validator(extracted):
         extracted = None
@@ -1284,12 +1971,13 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
             if (slot_def.on_invalid_response_key and user_message.strip())
             else slot_def.on_missing_response_key
         )
-        ai_response_template = RESPONSES[response_key][language]
+        ai_response_template = RESPONSES[response_key][effective_language]
         ai_response = _format_with_ctx(ai_response_template, ctx)
 
         result = {
             'intent': current_flow,
-            'language': language,
+            'language': effective_language,
+            'session_language': ctx.get('session_language', language),
             'entities': {},
             'needs_clarification': True,
             'clarification_type': (
@@ -1395,8 +2083,20 @@ class BankAIConversation:
     def detect_language(self, text: str) -> str:
         return detect_language(text)
 
+    def resolve_language(self, text: str, ctx: Dict = None) -> str:
+        return resolve_language(text, ctx or {})
+
     def normalize_slang(self, text: str) -> str:
         return normalize_slang(text)
+
+    def normalize_for_matching(self, text: str) -> str:
+        return normalize_for_matching(text)
+
+    def normalize_for_entity_extraction(self, text: str) -> str:
+        return normalize_for_entity_extraction(text)
+
+    def tag_tokens(self, text: str) -> List[Tuple[str, str]]:
+        return tag_tokens(text)
 
     def extract_amount(self, text: str) -> Optional[int]:
         return extract_amount(text)
@@ -1417,15 +2117,39 @@ class BankAIConversation:
         return extract_redemption_choice(text)
 
     def detect_intent(self, text: str) -> str:
-        """Detect user intent"""
-        normalized = normalize_slang(text)
+        """Detect user intent from user_message.
+
+        Matches against THREE representations of the input:
+        1. The original text (catches Urdu-script patterns directly).
+        2. The normalize_for_matching() output (catches slang-substituted
+           patterns like 'electricity', 'send', 'check').
+        3. The raw lowercased text (catches Roman Urdu patterns before slang
+           substitution, e.g. 'raseed', 'khata', 'chori' which slang
+           substitution converts to 'receipt', 'account', 'theft' — the
+           INTENT_PATTERNS contain the *original* RU words, not the
+           substituted English ones).
+
+        Using all three ensures no pattern is missed regardless of whether
+        it was written expecting original or normalized input.
+        """
+        normalized = normalize_for_matching(text)
+        raw_lower = text.lower().strip()
+        # Also try with diacritics stripped but no slang substitution,
+        # for Urdu-script patterns that survive NFKC/diacritic stripping
+        urdu_stripped = _strip_diacritics(unicodedata.normalize('NFKC', text))
+
+        candidates = [text, normalized, raw_lower, urdu_stripped]
 
         for intent, patterns in INTENT_PATTERNS.items():
             for pattern in patterns:
-                if re.search(pattern, normalized, re.IGNORECASE):
-                    return intent
+                for candidate in candidates:
+                    try:
+                        if re.search(pattern, candidate, re.IGNORECASE | re.UNICODE):
+                            return intent
+                    except re.error:
+                        continue
 
-        if re.match(r'^(hi|hello|hey|salam)', text.lower()):
+        if re.match(r'^(hi|hello|hey|salam|assalam)', text.lower()):
             return 'greeting'
 
         return 'unknown'
@@ -1468,14 +2192,17 @@ class BankAIConversation:
             conversation_context = {}
         ctx = dict(conversation_context)
 
-        language = detect_language(user_message)
+        # Resolve effective language using session lock + high-threshold
+        # override rule.  Falls back to detect_language for the first turn.
+        language = resolve_language(user_message, ctx)
+        # Persist the resolved language into ctx immediately so every
+        # downstream path (interceptors, flow steps, helpers) has it.
+        ctx['session_language'] = language
 
-        # ---------------------------------------------------------------
-        # Raw password collection states bypass ALL interceptor/flow logic
+        # Raw password collection states bypass all interceptor/flow logic
         # except emergency pre-emption (handled inside check_global_controls,
         # which explicitly still fires here even when awaiting_password is
         # set - see its docstring).
-        # ---------------------------------------------------------------
         emergency_intercept = None
         if ctx.get('awaiting_password') or ctx.get('awaiting_emergency_password'):
             normalized_check = normalize_slang(user_message)
@@ -1486,7 +2213,7 @@ class BankAIConversation:
             return emergency_intercept
 
         if ctx.get('awaiting_emergency_password'):
-            # SEC-1 / EC-12: never echo the raw password text back out via
+            # Never echo the raw password text back out via
             # normalized_text. entities['password'] is deliberately kept
             # intact (not scrubbed) because app.py's emergency-unlock flow
             # depends on the real value for check_password_hash(); redacting
@@ -1508,7 +2235,7 @@ class BankAIConversation:
 
         if ctx.get('awaiting_password'):
             original_intent = ctx.get('original_intent')
-            # SEC-1 / EC-12: same rationale as above - normalized_text is
+            # Same rationale as above - normalized_text is
             # redacted, entities['password'] is preserved for downstream
             # check_password_hash() verification.
             return {
@@ -1527,26 +2254,21 @@ class BankAIConversation:
                 'original_intent': original_intent,
             }
 
-        # ---------------------------------------------------------------
-        # STAGE 1: Global interceptor layer - runs before any active-flow
-        # logic and before fresh intent detection.
-        # ---------------------------------------------------------------
+        # Global interceptor layer - runs before any active-flow logic
+        # and before fresh intent detection.
         intercepted = check_global_controls(user_message, ctx)
         if intercepted is not None:
             return intercepted
 
-        # ---------------------------------------------------------------
-        # STAGE 2: Edit-previous-step utility - only relevant while a flow
-        # is active (including while sitting at a confirmation prompt).
-        # ---------------------------------------------------------------
+        # Edit-previous-step utility - only relevant while a flow is
+        # active (including while sitting at a confirmation prompt).
         if ctx.get('current_flow'):
             edit_result = try_handle_edit_previous(user_message, ctx)
             if edit_result is not None:
                 return edit_result
 
-        # ---------------------------------------------------------------
-        # STAGE 3: Confirmation step handling, if we're currently sitting
-        # in *_AWAIT_CONFIRMATION.
+        # Confirmation step handling, if we're currently sitting in
+        # *_AWAIT_CONFIRMATION.
         #
         # Primary signal is the round-tripped flow_state. As a safety net
         # for callers (like an unmodified app.py) that don't yet persist
@@ -1555,7 +2277,6 @@ class BankAIConversation:
         # active flow is already filled - that's structurally only true
         # once we've reached confirmation, since run_flow_step never
         # returns with every slot filled for any other reason.
-        # ---------------------------------------------------------------
         flow_state_name = ctx.get('flow_state')
         current_flow_for_confirm_check = ctx.get('current_flow')
         all_slots_filled = (
@@ -1567,9 +2288,7 @@ class BankAIConversation:
                 or all_slots_filled):
             return handle_confirmation_step(user_message, ctx, language)
 
-        # ---------------------------------------------------------------
-        # STAGE 4: Active table-driven flows.
-        # ---------------------------------------------------------------
+        # Active table-driven flows.
         current_flow = ctx.get('current_flow')
 
         if current_flow in ('transfer_money', 'pay_bill'):
@@ -1578,21 +2297,23 @@ class BankAIConversation:
         if current_flow == 'redeem_points':
             return self._run_redeem_points_step(user_message, ctx, language)
 
-        # ---------------------------------------------------------------
-        # No active flow - fresh intent detection.
-        # ---------------------------------------------------------------
         intent = self.detect_intent(user_message)
 
         if intent == 'transfer_money':
-            return run_flow_step(user_message, {}, language, force_flow='transfer_money')
+            result = run_flow_step(user_message, {}, language, force_flow='transfer_money')
+            result['session_language'] = language
+            return result
 
         if intent == 'pay_bill':
-            return run_flow_step(user_message, {}, language, force_flow='pay_bill')
+            result = run_flow_step(user_message, {}, language, force_flow='pay_bill')
+            result['session_language'] = language
+            return result
 
         if intent == 'redeem_points':
             return {
                 'intent': 'redeem_points',
                 'language': language,
+                'session_language': language,
                 'entities': {},
                 'needs_clarification': True,
                 'clarification_type': 'redemption_choice_missing',
@@ -1608,6 +2329,7 @@ class BankAIConversation:
             return {
                 'intent': 'human_agent',
                 'language': language,
+                'session_language': language,
                 'entities': {},
                 'needs_clarification': False,
                 'clarification_type': None,
@@ -1621,6 +2343,7 @@ class BankAIConversation:
             return {
                 'intent': 'greeting',
                 'language': language,
+                'session_language': language,
                 'entities': {},
                 'needs_clarification': False,
                 'clarification_type': None,
@@ -1636,6 +2359,7 @@ class BankAIConversation:
         return {
             'intent': intent,
             'language': language,
+            'session_language': language,
             'entities': {},
             'needs_clarification': False,
             'clarification_type': None,
@@ -1672,7 +2396,7 @@ class BankAIConversation:
                     'flow_state': FlowState.REDEEM_AWAIT_PASSWORD.name,
                 }
             else:
-                # EC-4/EC-5: extractor returned None (e.g. "what are my
+                # Extractor returned None (e.g. "what are my
                 # options?" or garbled input). Re-prompt with the choices
                 # while preserving the active flow - never drop through to
                 # fresh intent detection.
@@ -1690,7 +2414,7 @@ class BankAIConversation:
                     'flow_state': FlowState.REDEEM_AWAIT_CHOICE.name,
                 }
         else:
-            # EC-4/EC-5: redemption_choice already filled (state replay) -
+            # redemption_choice already filled (state replay) -
             # re-issue the password prompt instead of falling through to
             # fresh intent detection.
             choice = ctx['redemption_choice']
@@ -1709,47 +2433,3 @@ class BankAIConversation:
                 'pending_entities': {'redemption_choice': choice},
                 'flow_state': FlowState.REDEEM_AWAIT_PASSWORD.name,
             }
-
-
-if __name__ == "__main__":
-    print("=== BankAI Pure AI Engine ===\n")
-
-    ai = BankAIConversation()
-
-    tests = [
-        "Hello",
-        "Send RS 5000 to Ahmed",
-        "Pay my electricity bill",
-        "Redeem my points",
-        "Block my card",
-    ]
-
-    for test in tests:
-        print(f"\nUser: {test}")
-        result = ai.process_message(test)
-        print(f"Intent: {result['intent']}")
-        print(f"Response: {result.get('ai_response', 'Processing...')}")
-
-
-
-# A note on app.py integration: this module works as-is with the current
-# app.py - no changes needed there. The confirmation step, cancel, and
-# help all key off 'current_flow' and the slot values app.py already
-# persists in the session, so they work even without app.py knowing about
-# 'flow_state' explicitly.
-#
-# Two optional app.py additions would round things out further:
-#
-# 1. Persist 'flow_state' the same way 'current_flow' already is, in the
-#    `elif nlp_result.get('current_flow'):` branch of chat_message(). Not
-#    required (there's a fallback that infers confirmation state from
-#    slot completeness), just a more direct signal if you want it.
-#
-# 2. Persist 'suspended_state' / 'suspended_flow' when present after an
-#    emergency pre-emption, and restore them once the emergency flow
-#    finishes (success or failure), so someone interrupted mid-transfer
-#    by a card-block can resume instead of starting over. Right now an
-#    emergency interruption just ends the prior flow cleanly - safe, but
-#    the user has to redo it afterward. The engine already returns
-#    everything needed for this; it's purely a session-bookkeeping change
-#    on the app.py side.
