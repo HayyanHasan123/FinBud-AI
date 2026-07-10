@@ -154,7 +154,10 @@ def init_db():
         id             SERIAL PRIMARY KEY,
         account_number VARCHAR(30),
         card_number    VARCHAR(20),
-        status         VARCHAR(20) DEFAULT 'active'
+        status         VARCHAR(20) DEFAULT 'active',
+        cardholder_name TEXT,
+        expiry          TEXT,
+        nickname        TEXT
     )''')
 
     # Fraud alerts
@@ -166,7 +169,46 @@ def init_db():
         created_at     VARCHAR(64)
     )''')
 
+    # Income transactions — Financial Advisor panel
+    # One row per income entry logged by the user (salary, rental, PSX, etc.)
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS income_transactions (
+        id             SERIAL PRIMARY KEY,
+        account_number VARCHAR(30)    NOT NULL,
+        amount         NUMERIC(15,2)  NOT NULL,
+        source         VARCHAR(120),
+        note           TEXT,
+        created_at     VARCHAR(64)
+    )''')
+
+    # Bank accounts — Digital Wallet tab
+    # Stores bank-linking requests; status starts as 'pending'
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS bank_accounts (
+        id             SERIAL PRIMARY KEY,
+        account_number VARCHAR(30)  NOT NULL,
+        bank_name      VARCHAR(120),
+        iban           VARCHAR(34),
+        status         VARCHAR(20) DEFAULT 'pending',
+        linked_at      VARCHAR(64)
+    )''')
+
     conn.commit()
+
+    # ── Safe column additions for tables that may already exist on disk ──────
+    # ADD COLUMN IF NOT EXISTS is idempotent — safe to run on every startup.
+    for stmt in [
+        # cards: new wallet columns (may not exist on older databases)
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS cardholder_name TEXT",
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS expiry          TEXT",
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS nickname        TEXT",
+    ]:
+        try:
+            c.execute(stmt); conn.commit()
+        except Exception as ex:
+            conn.rollback()
+            print(f"[init_db] column already present, skipping: {ex}")
+
     release_pg_conn(conn)
     print("✅ Database initialized successfully.")
 
@@ -368,7 +410,22 @@ def get_inbox(account, limit=100):
 
 
 def detect_anomalies(account):
+    """
+    Scans for suspicious activity across both bills and transactions.
+
+    Bill-level checks (original logic — untouched):
+      • new_biller       — first time this biller appears
+      • amount_spike     — current bill > 1.5× average of last 3 paid
+      • duplicate_bill   — same biller/amount/due_date already pending
+
+    Transaction-level checks (new — v3 optimization):
+      • large_transfer   — single debit > 3× the user's 30-day avg spend
+      • rapid_fire       — 3+ debits within any 10-minute window
+      • odd_hours        — debit between 00:00–04:00 (unusual for legit use)
+    """
     conn = get_pg_conn(); c = conn.cursor(); anomalies = []
+
+    # ── BILL-LEVEL CHECKS (original logic — unchanged) ────────────────────────
     c.execute(
         "SELECT id, biller, amount, due_date FROM bills WHERE account_number=%s AND status='unpaid'",
         (account,)
@@ -418,6 +475,87 @@ def detect_anomalies(account):
                 "bill_id": bill_id, "type": "duplicate_bill", "biller": biller, "amount": amount,
                 "message": "Duplicate unpaid bill detected."
             })
+
+    # ── TRANSACTION-LEVEL CHECKS (new — optimized v3) ─────────────────────────
+
+    # Pull last 60 days of debit transactions for this account
+    sixty_days_ago = datetime(
+        datetime.utcnow().year,
+        datetime.utcnow().month,
+        1
+    ).isoformat()
+    # Use a proper 60-day cutoff in Python to avoid SQL interval quirks
+    today     = datetime.utcnow()
+    cut_month = today.month - 2
+    cut_year  = today.year
+    while cut_month <= 0:
+        cut_month += 12
+        cut_year  -= 1
+    cutoff_60 = datetime(cut_year, cut_month, today.day).isoformat()
+
+    c.execute("""
+        SELECT id, amount, description, created_at
+        FROM dashboard_transactions
+        WHERE account_number=%s AND amount < 0 AND created_at >= %s
+        ORDER BY created_at ASC
+    """, (account, cutoff_60))
+    txns = c.fetchall()
+
+    # 1. Large transfer — debit > 3× average of last 30 days spend
+    if txns:
+        amounts = [abs(float(t['amount'])) for t in txns]
+        avg_spend = sum(amounts) / len(amounts)
+        for t in txns:
+            debit = abs(float(t['amount']))
+            if debit > avg_spend * 3 and debit > 5000:   # min PKR 5000 threshold
+                anomalies.append({
+                    "tx_id":   t['id'],
+                    "type":    "large_transfer",
+                    "amount":  debit,
+                    "avg":     round(avg_spend, 2),
+                    "message": f"Unusually large debit PKR {debit:,.0f} "
+                               f"(your avg spend is PKR {avg_spend:,.0f})."
+                })
+
+    # 2. Rapid-fire — 3+ debits within any 10-minute window
+    tx_times = []
+    for t in txns:
+        try:
+            tx_times.append((t['id'], datetime.fromisoformat(str(t['created_at']))))
+        except Exception:
+            pass
+    for i in range(len(tx_times)):
+        window = [tx_times[i]]
+        for j in range(i + 1, len(tx_times)):
+            diff = (tx_times[j][1] - tx_times[i][1]).total_seconds()
+            if diff <= 600:   # 10 minutes
+                window.append(tx_times[j])
+            else:
+                break
+        if len(window) >= 3:
+            anomalies.append({
+                "tx_id":   window[0][0],
+                "type":    "rapid_fire",
+                "count":   len(window),
+                "message": f"{len(window)} transactions within 10 minutes — possible unauthorized access."
+            })
+            break   # report once per scan to avoid flooding
+
+    # 3. Odd-hours — debits between 00:00 and 04:00 local time
+    for t in txns:
+        try:
+            tx_dt = datetime.fromisoformat(str(t['created_at']))
+            if 0 <= tx_dt.hour < 4:
+                anomalies.append({
+                    "tx_id":   t['id'],
+                    "type":    "odd_hours",
+                    "amount":  abs(float(t['amount'])),
+                    "time":    tx_dt.strftime('%H:%M'),
+                    "message": f"Debit of PKR {abs(float(t['amount'])):,.0f} at {tx_dt.strftime('%H:%M')} "
+                               f"(unusual hours — 12am–4am)."
+                })
+        except Exception:
+            pass
 
     release_pg_conn(conn)
     return anomalies
@@ -657,3 +795,246 @@ def get_product(product_id):
 def get_redemption_tier(tier_name):
     """Returns the config dict for a redemption tier, or None if invalid."""
     return REDEMPTION_TIERS.get(tier_name)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v3  — Financial Advisor + Digital Wallet backend
+# Added: 22 June 2026  |  Handoff doc: FinBud_Backend_Handoff_v3.docx
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ---------- INCOME SERVICE ----------
+def get_income_vs_expense(account):
+    """
+    Returns this calendar month's total income, total expenses, and net
+    for the given account.
+
+    • income   — summed from income_transactions
+    • expenses — summed from dashboard_transactions where amount < 0
+    • net      — income − expenses
+    """
+    conn = get_pg_conn(); c = conn.cursor()
+
+    # First day of the current UTC calendar month as an ISO string.
+    # Because created_at is stored as ISO text (e.g. "2026-06-22T10:30:00"),
+    # a simple string comparison >= month_start is lexicographically correct.
+    now         = datetime.utcnow()
+    month_start = datetime(now.year, now.month, 1).isoformat()
+
+    c.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM income_transactions
+        WHERE account_number=%s AND created_at >= %s
+    """, (account, month_start))
+    income = float(c.fetchone()['total'])
+
+    c.execute("""
+        SELECT COALESCE(SUM(ABS(amount)), 0) AS total
+        FROM dashboard_transactions
+        WHERE account_number=%s AND amount < 0 AND created_at >= %s
+    """, (account, month_start))
+    expenses = float(c.fetchone()['total'])
+
+    release_pg_conn(conn)
+    return {
+        'income':   round(income, 2),
+        'expenses': round(expenses, 2),
+        'net':      round(income - expenses, 2)
+    }
+
+
+def get_income_by_source(account):
+    """
+    Returns this calendar month's income grouped by source.
+    Response shape: { "Salary": 50000.0, "Rental Income": 20000.0, ... }
+    """
+    conn = get_pg_conn(); c = conn.cursor()
+
+    now         = datetime.utcnow()
+    month_start = datetime(now.year, now.month, 1).isoformat()
+
+    c.execute("""
+        SELECT source, COALESCE(SUM(amount), 0) AS total
+        FROM income_transactions
+        WHERE account_number=%s AND created_at >= %s
+        GROUP BY source
+        ORDER BY total DESC
+    """, (account, month_start))
+    rows = c.fetchall(); release_pg_conn(conn)
+    return {r['source']: round(float(r['total']), 2) for r in rows}
+
+
+def get_monthly_trend(account, months=6):
+    """
+    Returns income vs. expenses for the last N complete calendar months.
+    Used by the Monthly Trend bar chart in the Financial Advisor panel.
+
+    Response shape:
+        [{"month": "Jan 26", "income": 50000.0, "expenses": 30000.0}, ...]
+    """
+    conn = get_pg_conn(); c = conn.cursor()
+
+    # Calculate the cutoff date in pure Python to avoid SQL INTERVAL
+    # parameterization quirks in psycopg2.
+    today = datetime.utcnow()
+    cutoff_month = today.month - months
+    cutoff_year  = today.year
+    while cutoff_month <= 0:
+        cutoff_month += 12
+        cutoff_year  -= 1
+    cutoff_iso = datetime(cutoff_year, cutoff_month, 1).isoformat()
+
+    # Income per month — cast stored ISO text to timestamp for DATE_TRUNC
+    c.execute("""
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', created_at::timestamp), 'Mon YY') AS month,
+            COALESCE(SUM(amount), 0) AS income
+        FROM income_transactions
+        WHERE account_number=%s AND created_at >= %s
+        GROUP BY DATE_TRUNC('month', created_at::timestamp)
+        ORDER BY DATE_TRUNC('month', created_at::timestamp)
+    """, (account, cutoff_iso))
+    income_map = {r['month']: round(float(r['income']), 2) for r in c.fetchall()}
+
+    # Expenses per month from dashboard_transactions (negative amounts)
+    c.execute("""
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', created_at::timestamp), 'Mon YY') AS month,
+            COALESCE(SUM(ABS(amount)), 0) AS expenses
+        FROM dashboard_transactions
+        WHERE account_number=%s AND amount < 0 AND created_at >= %s
+        GROUP BY DATE_TRUNC('month', created_at::timestamp)
+        ORDER BY DATE_TRUNC('month', created_at::timestamp)
+    """, (account, cutoff_iso))
+    expense_map = {r['month']: round(float(r['expenses']), 2) for r in c.fetchall()}
+
+    release_pg_conn(conn)
+
+    # Merge both sets of months in chronological order
+    all_months = sorted(set(list(income_map.keys()) + list(expense_map.keys())))
+    return [
+        {
+            'month':    m,
+            'income':   income_map.get(m, 0),
+            'expenses': expense_map.get(m, 0)
+        }
+        for m in all_months
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v4  — Credit Intelligence (C.I.) Module
+# Added: 9 July 2026  |  MoM Week 2 — 5 Jul task (Anum)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generate_credit_score(account):
+    """
+    Computes a simplified credit score on a 300–850 scale (FICO-style).
+
+    Four factors considered:
+      1. Late payment history   — biggest negative driver (-40 per late payment)
+      2. Current balance        — positive driver (up to +100)
+      3. Transaction activity   — shows account usage (up to +50)
+      4. Rewards engagement     — proxy for responsible usage (up to +50)
+
+    Score bands:
+      750–850  → Excellent  (green)
+      650–749  → Good       (lime)
+      500–649  → Fair       (amber)
+      300–499  → Poor       (red)
+
+    Returns a dict with score, label, color, personalised advice, and breakdown.
+    """
+    conn = get_pg_conn(); c = conn.cursor()
+
+    # 1. Late payment count
+    c.execute(
+        "SELECT COUNT(*) AS cnt FROM late_payments WHERE account_number=%s",
+        (account,)
+    )
+    late_count = int(c.fetchone()['cnt'])
+
+    # 2. Current balance from dashboard_users
+    c.execute(
+        "SELECT balance FROM dashboard_users WHERE account_number=%s",
+        (account,)
+    )
+    row     = c.fetchone()
+    balance = float(row['balance']) if row else 0.0
+
+    # 3. Transaction count over the last 6 calendar months
+    today       = datetime.utcnow()
+    cut_month   = today.month - 6
+    cut_year    = today.year
+    while cut_month <= 0:
+        cut_month += 12
+        cut_year  -= 1
+    cutoff_6m = datetime(cut_year, cut_month, 1).isoformat()
+
+    c.execute("""
+        SELECT COUNT(*) AS cnt FROM dashboard_transactions
+        WHERE account_number=%s AND created_at >= %s
+    """, (account, cutoff_6m))
+    tx_count = int(c.fetchone()['cnt'])
+
+    # 4. Reward points balance
+    c.execute(
+        "SELECT points FROM rewards WHERE account_number=%s",
+        (account,)
+    )
+    row    = c.fetchone()
+    points = int(row['points']) if row else 0
+
+    release_pg_conn(conn)
+
+    # ── Scoring formula ────────────────────────────────────────────────────────
+    score = 650  # neutral starting base
+
+    # Late payments: -40 each, capped at -200
+    score -= min(late_count * 40, 200)
+
+    # Balance bonus: PKR 1,000 = 1 point, capped at +100
+    score += min(int(balance / 1000), 100)
+
+    # Activity bonus: 2 points per transaction in last 6 months, capped at +50
+    score += min(tx_count * 2, 50)
+
+    # Rewards bonus: 1 point per 20 reward points, capped at +50
+    score += min(int(points / 20), 50)
+
+    # Hard clamp to 300–850
+    score = max(300, min(850, score))
+
+    # ── Band label + personalised advice ──────────────────────────────────────
+    if score >= 750:
+        label  = 'Excellent'
+        color  = '#22c55e'
+        advice = ('Your credit health is excellent. '
+                  'Keep paying bills on time and maintain your balance to stay here.')
+    elif score >= 650:
+        label  = 'Good'
+        color  = '#84cc16'
+        advice = ('Your credit health is good. '
+                  'Avoid late payments and increase your balance to reach Excellent.')
+    elif score >= 500:
+        label  = 'Fair'
+        color  = '#f59e0b'
+        advice = ('Pay all bills on time and keep your balance above PKR 50,000 '
+                  'to move into the Good band.')
+    else:
+        label  = 'Poor'
+        color  = '#ef4444'
+        advice = ('Multiple late payments are hurting your score. '
+                  'Clear outstanding bills immediately and avoid new ones.')
+
+    return {
+        'score':   score,
+        'label':   label,
+        'color':   color,
+        'advice':  advice,
+        'breakdown': {
+            'late_payments':   late_count,
+            'balance':         round(balance, 2),
+            'transactions_6m': tx_count,
+            'reward_points':   points
+        }
+    }

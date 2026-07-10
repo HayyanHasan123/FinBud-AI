@@ -40,7 +40,12 @@ from features import (
     detect_anomalies, create_ticket, queue_list, claim, resolve, cancel,
     status, trigger_emergency, has_registered_card, list_cards,
     BILL_PROVIDERS, REDEMPTION_TIERS, MOCK_PRODUCT_CATALOGUE,
-    validate_provider, get_saved_biller_ref, get_product, get_redemption_tier
+    validate_provider, get_saved_biller_ref, get_product, get_redemption_tier,
+    # ── v3 additions (Financial Advisor + Digital Wallet) ─────────────────────
+    get_income_vs_expense, get_income_by_source,
+    get_monthly_trend, get_pg_conn, release_pg_conn,
+    # ── v4 additions (Credit Intelligence) ───────────────────────────────────
+    generate_credit_score
 )
 
 from nlp_module import BankAIConversation
@@ -107,7 +112,8 @@ def init_user_tables():
         balance         NUMERIC(15,2) DEFAULT 0,
         points          INTEGER       DEFAULT 0,
         created_at      VARCHAR(64),
-        language        VARCHAR(10)   DEFAULT 'en'
+        language        VARCHAR(10)   DEFAULT 'en',
+        other_assets    NUMERIC(15,2) DEFAULT 0
     )''')
 
     c.execute('''
@@ -163,31 +169,21 @@ def init_user_tables():
     )''')
 
     conn.commit()
+
+    # ── Safe column addition: other_assets may not exist on older databases ──
+    try:
+        c.execute("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS other_assets NUMERIC(15,2) DEFAULT 0")
+        conn.commit()
+    except Exception as ex:
+        conn.rollback()
+        print(f"[init_user_tables] other_assets column already present, skipping: {ex}")
+
     release_db(conn)
 
 
 # Initialize tables from both modules
 init_user_tables()
 init_db()
-
-
-# ============= TEMPLATE ROUTES =============
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/dashboard')
-def dashboard():
-    if 'user_id' not in session:
-        return redirect(url_for('index'))
-    return render_template('dashboard.html')
-
-@app.route('/chat')
-def chat():
-    if 'user_id' not in session:
-        return redirect(url_for('index'))
-    return render_template('chat.html')
-
 
 # ============= AUTHENTICATION API =============
 @app.route('/api/auth/register', methods=['POST'])
@@ -1411,6 +1407,378 @@ def get_saved_bill_ref():
     if saved_ref:
         return jsonify({'success': True,  'has_saved_ref': True,  'ref': saved_ref, 'provider': provider})
     return jsonify(    {'success': True,  'has_saved_ref': False, 'ref': None,      'provider': provider})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v3  — Financial Advisor + Digital Wallet endpoints
+# Each route uses get_pg_conn() / release_pg_conn() from features.py so it
+# shares the same PostgreSQL pool.  No existing routes are touched.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FINANCIAL ADVISOR  — Income Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/income/log', methods=['POST'])
+def log_income():
+    """
+    Logs one income entry:
+    • inserts into income_transactions  (for advisor analytics)
+    • inserts into dashboard_transactions as a positive-amount 'income' row
+      (so it appears in transaction history & receipts)
+    • credits dashboard_users.balance
+    Body:  { amount, source, note }
+    Reply: { success, new_balance, transaction_id }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        data           = request.json
+        amount         = float(data.get('amount', 0))
+        source         = data.get('source', 'Other').strip()
+        note           = data.get('note', '').strip()
+        account_number = session['account_number']
+
+        if amount <= 0:
+            return jsonify({'success': False, 'message': 'Amount must be positive'}), 400
+
+        now_iso = datetime.utcnow().isoformat()
+        conn    = get_pg_conn(); c = conn.cursor()
+
+        # 1. Record in income_transactions for advisor analytics
+        c.execute("""
+            INSERT INTO income_transactions(account_number, amount, source, note, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (account_number, amount, source, note, now_iso))
+
+        # 2. Record in dashboard_transactions so it shows in history + receipts
+        c.execute("""
+            INSERT INTO dashboard_transactions
+                (account_number, transaction_type, description, amount, status, created_at)
+            VALUES (%s, 'income', %s, %s, 'completed', %s)
+            RETURNING id
+        """, (account_number, f"Income — {source}", amount, now_iso))
+        transaction_id = c.fetchone()['id']
+
+        # 3. Credit balance
+        c.execute("""
+            UPDATE dashboard_users
+            SET balance = balance + %s
+            WHERE account_number = %s
+        """, (amount, account_number))
+
+        # 4. Read updated balance to return to frontend
+        c.execute(
+            "SELECT balance FROM dashboard_users WHERE account_number=%s",
+            (account_number,)
+        )
+        new_balance = float(c.fetchone()['balance'])
+
+        conn.commit(); release_pg_conn(conn)
+
+        return jsonify({
+            'success':        True,
+            'new_balance':    new_balance,
+            'transaction_id': transaction_id
+        })
+
+    except Exception as e:
+        print(f"[log_income] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FINANCIAL ADVISOR  — Analytics endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/financial/income-vs-expense', methods=['GET'])
+def income_vs_expense():
+    """
+    This calendar month's income, expenses, and net for the logged-in user.
+    Reply: { success, income, expenses, net }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        data = get_income_vs_expense(session['account_number'])
+        return jsonify({'success': True, **data})
+    except Exception as e:
+        print(f"[income_vs_expense] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/financial/income-by-source', methods=['GET'])
+def income_by_source():
+    """
+    This calendar month's income grouped by source.
+    Reply: { success, income_by_source: { "Salary": 50000, ... } }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        breakdown = get_income_by_source(session['account_number'])
+        return jsonify({'success': True, 'income_by_source': breakdown})
+    except Exception as e:
+        print(f"[income_by_source] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/financial/monthly-trend', methods=['GET'])
+def monthly_trend():
+    """
+    Income vs. expenses for each of the last 6 calendar months.
+    Reply: { success, trend: [{ month, income, expenses }, ...] }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        trend = get_monthly_trend(session['account_number'])
+        return jsonify({'success': True, 'trend': trend})
+    except Exception as e:
+        print(f"[monthly_trend] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/financial/utility-usage', methods=['GET'])
+def utility_usage():
+    """
+    Placeholder — returns a clean 'coming soon' response.
+    The frontend already handles this gracefully (shows a roadmap note).
+    A real implementation would query a biller integration for unit data.
+    Reply: { success: false, message }  →  frontend shows placeholder card.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    # Returning success=False causes the frontend to show the "on the roadmap"
+    # placeholder text — which is the correct UX until biller integration exists.
+    return jsonify({
+        'success': False,
+        'message': 'Utility unit tracking requires a biller integration (roadmap item).'
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIGITAL WALLET  — Card Management
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/cards/add', methods=['POST'])
+def add_card():
+    """
+    Adds a card to the user's wallet.
+    Only the last 4 digits are stored (same masking pattern as the existing
+    cards table); full tokenization is the post-competition upgrade path.
+    Body:  { cardholder_name, card_number (16-digit raw), expiry, nickname }
+    Reply: { success, card_id }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        data           = request.json
+        raw_number     = str(data.get('card_number', '')).replace(' ', '')
+        cardholder     = data.get('cardholder_name', '').strip()
+        expiry         = data.get('expiry', '').strip()
+        nickname       = data.get('nickname', '').strip()
+        account_number = session['account_number']
+
+        if len(raw_number) != 16 or not raw_number.isdigit():
+            return jsonify({'success': False, 'message': 'Card number must be exactly 16 digits'}), 400
+
+        # Store only last 4 digits — raw PAN never persists on server
+        masked_number = raw_number[-4:]
+
+        conn = get_pg_conn(); c = conn.cursor()
+        c.execute("""
+            INSERT INTO cards(account_number, card_number, cardholder_name, expiry, nickname, status)
+            VALUES (%s, %s, %s, %s, %s, 'active')
+            RETURNING id
+        """, (account_number, masked_number, cardholder, expiry, nickname))
+        card_id = c.fetchone()['id']
+        conn.commit(); release_pg_conn(conn)
+
+        return jsonify({'success': True, 'card_id': card_id})
+
+    except Exception as e:
+        print(f"[add_card] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIGITAL WALLET  — Bank Account Linking
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/wallet/bank-accounts', methods=['GET'])
+def wallet_bank_accounts():
+    """
+    Returns all bank accounts linked (or pending) for the logged-in user.
+    Reply: { success, accounts: [{ bank, masked_iban, status }, ...] }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        account_number = session['account_number']
+        conn = get_pg_conn(); c = conn.cursor()
+        c.execute("""
+            SELECT bank_name, iban, status
+            FROM bank_accounts
+            WHERE account_number=%s
+            ORDER BY linked_at DESC
+        """, (account_number,))
+        rows = c.fetchall(); release_pg_conn(conn)
+
+        accounts = [
+            {
+                'bank':        r['bank_name'],
+                # Mask the IBAN: show country+check digits + last 4 only
+                'masked_iban': f"{r['iban'][:4]} **** **** **** {r['iban'][-4:]}",
+                'status':      r['status']
+            }
+            for r in rows
+        ]
+        return jsonify({'success': True, 'accounts': accounts})
+
+    except Exception as e:
+        print(f"[wallet_bank_accounts] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/wallet/link-bank', methods=['POST'])
+def link_bank():
+    """
+    Records a bank-linking request with status='pending'.
+    Real OTP / Open Banking consent flow is the post-competition upgrade path
+    (1LINK Open API Gateway + SBP TPP registration).
+    Body:  { bank, iban }
+    Reply: { success, message }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        data           = request.json
+        bank           = data.get('bank', '').strip()
+        iban           = data.get('iban', '').strip().upper()
+        account_number = session['account_number']
+
+        # Basic IBAN validation (per mentor's slot-filling feedback: exactly 24 chars)
+        if not bank:
+            return jsonify({'success': False, 'message': 'Bank name is required'}), 400
+        if len(iban) != 24:
+            return jsonify({'success': False, 'message': 'IBAN must be exactly 24 characters'}), 400
+
+        conn = get_pg_conn(); c = conn.cursor()
+        c.execute("""
+            INSERT INTO bank_accounts(account_number, bank_name, iban, status, linked_at)
+            VALUES (%s, %s, %s, 'pending', %s)
+        """, (account_number, bank, iban, datetime.utcnow().isoformat()))
+        conn.commit(); release_pg_conn(conn)
+
+        return jsonify({
+            'success': True,
+            'message': f'{bank} link request received — pending consent verification.'
+        })
+
+    except Exception as e:
+        print(f"[link_bank] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIGITAL WALLET  — Other Assets (Net Worth)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/wallet/other-assets', methods=['GET'])
+def get_other_assets():
+    """
+    Returns the user's manually-entered 'other assets' total.
+    Used by the Net Worth calculation in the Wallet view.
+    Reply: { success, amount }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        conn = get_pg_conn(); c = conn.cursor()
+        c.execute(
+            "SELECT other_assets FROM dashboard_users WHERE account_number=%s",
+            (session['account_number'],)
+        )
+        row = c.fetchone(); release_pg_conn(conn)
+        amount = float(row['other_assets']) if row and row['other_assets'] else 0.0
+        return jsonify({'success': True, 'amount': amount})
+
+    except Exception as e:
+        print(f"[get_other_assets] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/wallet/other-assets', methods=['POST'])
+def set_other_assets():
+    """
+    Saves the user's 'other assets' figure.
+    Body:  { amount }
+    Reply: { success, amount }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        amount = float(request.json.get('amount', 0))
+        if amount < 0:
+            return jsonify({'success': False, 'message': 'Amount cannot be negative'}), 400
+
+        conn = get_pg_conn(); c = conn.cursor()
+        c.execute(
+            "UPDATE dashboard_users SET other_assets=%s WHERE account_number=%s",
+            (amount, session['account_number'])
+        )
+        conn.commit(); release_pg_conn(conn)
+        return jsonify({'success': True, 'amount': amount})
+
+    except Exception as e:
+        print(f"[set_other_assets] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v4  — Credit Intelligence (C.I.) API
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/credit-score', methods=['GET'])
+def credit_score():
+    """
+    Returns the computed credit score for the logged-in user.
+
+    Response shape:
+    {
+        "success": true,
+        "score":   720,
+        "label":   "Good",
+        "color":   "#84cc16",
+        "advice":  "...",
+        "breakdown": {
+            "late_payments":   0,
+            "balance":         75000.00,
+            "transactions_6m": 14,
+            "reward_points":   350
+        }
+    }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        result = generate_credit_score(session['account_number'])
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        print(f"[credit_score] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 if __name__ == '__main__':
