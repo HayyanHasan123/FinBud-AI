@@ -20,7 +20,20 @@ export default function Chat() {
 
   useEffect(() => {
     checkCard()
+    // Module F: Dashboard.jsx sets these on <html> and they persist across
+    // client-side navigation, but if a user lands directly on /chat (e.g. a
+    // deep link or a fresh tab), apply the saved preference here too.
+    document.documentElement.setAttribute('data-font-size', localStorage.getItem('finbud_font_size') || 'default')
+    document.documentElement.setAttribute('data-contrast', localStorage.getItem('finbud_high_contrast') === 'true' ? 'high' : 'default')
   }, [])
+
+  function speak(text) {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'en-US'
+    window.speechSynthesis.speak(utterance)
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -343,7 +356,7 @@ export default function Chat() {
 
     return (
       <div className={`pw-modal ${isEmergency ? 'emergency' : ''}`}>
-        <button className="pw-close" onClick={() => setModal(null)}>×</button>
+        <button className="pw-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
         <h3>{pendingInfo?.title}</h3>
         <div className="pw-steps">
           {[1,2].map((n,i) => (
@@ -380,7 +393,7 @@ export default function Chat() {
     const isTransfer = type === 'transfer'
     return (
       <div className="pw-modal">
-        <button className="pw-close" onClick={() => setModal(null)}>×</button>
+        <button className="pw-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
         <div style={{ textAlign:'center', padding:10 }}>
           <div className="pw-steps">
             {[1,2].map((n,i) => (
@@ -494,6 +507,28 @@ export default function Chat() {
         .receipt-print .r-header { text-align:center; margin-bottom:20px; }
         .receipt-print .r-header h2 { color:#5c2d91; margin:0; }
         .receipt-print .r-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #eee; font-size:14px; }
+        .msg-read-aloud { display:inline-flex; background:none; border:none; cursor:pointer; font-size:13px; margin-left:8px; opacity:0.6; vertical-align:middle; }
+        .msg-read-aloud:hover { opacity:1; }
+
+        /* ══════════ ACCESSIBILITY (Module F) — mirrors Dashboard.jsx ══════════ */
+        html[data-contrast="high"] {
+          --primary-purple: #3d1a66;
+          --secondary-purple: #e8e8e8;
+          --text-dark: #000000;
+          --card: #ffffff;
+        }
+        html[data-contrast="high"] .message.ai,
+        html[data-contrast="high"] .chat-container,
+        html[data-contrast="high"] .sidebar-card { border:1.5px solid #000; }
+
+        html[data-font-size="large"] .message { font-size:18px; }
+        html[data-font-size="large"] .input-area input { font-size:18px; }
+        html[data-font-size="large"] .sidebar-card-title { font-size:16px; }
+        html[data-font-size="large"] .sidebar-card-desc { font-size:13px; }
+
+        html[data-font-size="small"] .message { font-size:13px; }
+        html[data-font-size="small"] .input-area input { font-size:14px; }
+
         @media(max-width:900px) { .topbar{padding:15px 20px;} .main-layout{flex-direction:column;height:auto;padding:10px;margin:0;gap:10px;} .sidebar-right{width:100%;flex-direction:row;} .sidebar-card{flex:1;} .chat-container{height:60vh;border-radius:8px;} .message{max-width:90%;} .brand{position:static;transform:none;} }
       `}</style>
 
@@ -524,7 +559,12 @@ export default function Chat() {
               </div>
             )}
             {messages.map(m => (
-              <div key={m.id} className={`message ${m.type}`}>{m.text}</div>
+              <div key={m.id} className={`message ${m.type}`}>
+                {m.text}
+                {m.type === 'ai' && (
+                  <button type="button" className="msg-read-aloud" aria-label="Read this message aloud" onClick={() => speak(m.text)}>🔊</button>
+                )}
+              </div>
             ))}
             {isLoading && <div className="message loading"><i className="fas fa-spinner fa-spin" /> Thinking...</div>}
             <div ref={messagesEndRef} />
@@ -538,17 +578,19 @@ export default function Chat() {
               onChange={e => setInputText(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && !isLoading && sendMessage()}
               disabled={isLoading}
+              aria-label="Type your message to FinBud AI"
             />
-            <button className={`mic-btn ${isRecording ? 'recording' : ''}`} onClick={toggleRecording} title="Voice Input">
+            <button className={`mic-btn ${isRecording ? 'recording' : ''}`} onClick={toggleRecording}
+              title="Voice Input" aria-label={isRecording ? 'Stop recording' : 'Start voice input'}>
               <i className={`fas fa-${isRecording ? 'stop' : 'microphone'}`} />
             </button>
-            <button className="send-btn" onClick={() => sendMessage()} disabled={isLoading}>Send</button>
+            <button className="send-btn" onClick={() => sendMessage()} disabled={isLoading} aria-label="Send message">Send</button>
           </div>
         </main>
 
         {/* SIDEBAR */}
         <aside className="sidebar-right">
-          <div className="sidebar-card human" onClick={handleHumanHandoff}>
+          <div className="sidebar-card human" role="button" tabIndex={0} aria-label="Connect with a human banker" onClick={handleHumanHandoff}>
             <div style={{ fontSize: 24 }}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
@@ -559,7 +601,8 @@ export default function Chat() {
             <div className="sidebar-card-desc">Connect with banker</div>
           </div>
 
-          <div className={`sidebar-card emergency-card ${!hasCard ? 'no-card' : ''}`} onClick={handleEmergency}>
+          <div className={`sidebar-card emergency-card ${!hasCard ? 'no-card' : ''}`} role="button" tabIndex={0}
+            aria-label={hasCard ? 'Emergency: lock all cards now' : 'Emergency lock unavailable, no card registered'} onClick={handleEmergency}>
             <div style={{ fontSize: 24 }}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />

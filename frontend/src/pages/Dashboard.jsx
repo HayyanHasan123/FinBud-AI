@@ -50,15 +50,6 @@ function detectBankFromIBAN(iban) {
   return PAKISTAN_BANK_CODES[code] || null
 }
 
-// Simple, illustrative starting-point allocations for the "Grow Your Money"
-// education card — not personalized financial advice, just a rule-of-thumb
-// split shown to spark the conversation (labeled clearly as such in the UI).
-const RISK_ALLOCATIONS = {
-  Conservative: { Gold: 50, PSX: 30, Crypto: 5, Savings: 15 },
-  Balanced:     { Gold: 30, PSX: 45, Crypto: 10, Savings: 15 },
-  Aggressive:   { Gold: 15, PSX: 50, Crypto: 25, Savings: 10 },
-}
-
 // Heuristic recurring-charge detector — groups expense transactions by
 // description and flags ones that repeat 2+ times at a consistent amount
 // (within 15%). Works entirely off /api/transaction/history, no new backend
@@ -81,6 +72,14 @@ function detectSubscriptions(transactions) {
     if (consistent) subs.push({ description, amount: avg, occurrences: amounts.length })
   })
   return subs.sort((a, b) => b.amount - a.amount)
+}
+
+// Short currency label for tight spaces (e.g. "45K" instead of "45,000") —
+// used on the Monthly Trend bars so the numbers fit above thin bar columns.
+function formatCompactPKR(n) {
+  const v = Math.abs(n || 0)
+  if (v >= 1000) return `${Math.round(v / 1000)}K`
+  return `${Math.round(v)}`
 }
 
 export default function Dashboard() {
@@ -118,6 +117,41 @@ export default function Dashboard() {
     otherAssetsAvailable: true
   })
   const printRef = useRef(null)
+
+  // ── ACCESSIBILITY (Module F) ────────────────────────────
+  // Text size, high contrast, and simple mode are read from localStorage on
+  // load and applied as data-attributes on <html>, so a plain CSS override
+  // layer (bottom of the <style> block below) can restyle the app instantly
+  // — no reload, no backend call. Preferences persist across sessions and
+  // across routes (Chat.jsx reads the same keys).
+  const [fontSize, setFontSize] = useState(() => localStorage.getItem('finbud_font_size') || 'default')
+  const [highContrast, setHighContrast] = useState(() => localStorage.getItem('finbud_high_contrast') === 'true')
+  const [simpleMode, setSimpleMode] = useState(() => localStorage.getItem('finbud_simple_mode') === 'true')
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-font-size', fontSize)
+    localStorage.setItem('finbud_font_size', fontSize)
+  }, [fontSize])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-contrast', highContrast ? 'high' : 'default')
+    localStorage.setItem('finbud_high_contrast', String(highContrast))
+  }, [highContrast])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-simple-mode', String(simpleMode))
+    localStorage.setItem('finbud_simple_mode', String(simpleMode))
+  }, [simpleMode])
+
+  // Reads the numbers out loud in plain language — for visually impaired,
+  // low-literacy, or elderly users. Browser-native, no backend needed.
+  function speak(text) {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'en-US'
+    window.speechSynthesis.speak(utterance)
+  }
 
   useEffect(() => { loadAll() }, [])
 
@@ -1019,6 +1053,27 @@ export default function Dashboard() {
   }
 
   // ── HELPERS ──────────────────────────────────────────────
+  // One-tap plain-language explainer for jargon terms (Module F). Tap the
+  // "?" to see a short sentence, tap again (or elsewhere) to close it.
+  function InfoTip({ text }) {
+    const [open, setOpen] = useState(false)
+    return (
+      <span className="info-tip-wrap">
+        <button
+          type="button"
+          className="info-tip-btn"
+          aria-label="What does this mean?"
+          onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
+        >?</button>
+        {open && (
+          <span className="info-tip-bubble" onClick={e => e.stopPropagation()}>
+            {text}
+          </span>
+        )}
+      </span>
+    )
+  }
+
   function stepDots(current, total) {
     return (
       <div className="step-indicator">
@@ -1067,12 +1122,63 @@ export default function Dashboard() {
       case 'settings': return (
         <div>
           <h3>Settings</h3>
+          <div style={{ padding: 15, borderBottom: '1px solid var(--secondary-purple)', cursor: 'pointer' }} onClick={() => setModal({ type: 'accessibilitySettings' })}>
+            <strong>Display &amp; Accessibility</strong>
+            <p style={{ fontSize: 13, color: '#666', margin: '5px 0 0' }}>High contrast, simple mode</p>
+          </div>
           {['Notifications', 'Language & Region', 'Linked Accounts', 'Privacy Settings'].map(s => (
             <div key={s} style={{ padding: 15, borderBottom: '1px solid var(--secondary-purple)', cursor: 'pointer' }} onClick={() => alert('Feature coming soon!')}>
               <strong>{s}</strong>
             </div>
           ))}
           <button className="modal-btn-primary" onClick={() => setModal(null)}>CLOSE</button>
+        </div>
+      )
+      case 'accessibilitySettings': return (
+        <div>
+          <h3>Display &amp; Accessibility</h3>
+          <p style={{ fontSize: 12, color: '#777', marginTop: -8, marginBottom: 20 }}>
+            These settings apply everywhere in FinBud, including chat, and are remembered on this device.
+          </p>
+
+          <div className="a11y-toggle-row">
+            <div>
+              <strong>High Contrast Mode</strong>
+              <p style={{ fontSize: 12, color: '#777', margin: '4px 0 0' }}>Stronger colors, easier to read in bright light or for low vision.</p>
+            </div>
+            <button
+              type="button"
+              className={`toggle-switch ${highContrast ? 'on' : ''}`}
+              role="switch"
+              aria-checked={highContrast}
+              aria-label="Toggle high contrast mode"
+              onClick={() => setHighContrast(v => !v)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </div>
+
+          <div className="a11y-toggle-row">
+            <div>
+              <strong>Simple Mode</strong>
+              <p style={{ fontSize: 12, color: '#777', margin: '4px 0 0' }}>Bigger buttons and fewer things on screen at once.</p>
+            </div>
+            <button
+              type="button"
+              className={`toggle-switch ${simpleMode ? 'on' : ''}`}
+              role="switch"
+              aria-checked={simpleMode}
+              aria-label="Toggle simple mode"
+              onClick={() => setSimpleMode(v => !v)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </div>
+
+          <p style={{ fontSize: 12, color: '#777', marginTop: 20 }}>
+            Text size can be changed any time from the <strong>A- / A / A+</strong> buttons in the left sidebar.
+          </p>
+          <button className="modal-btn-primary" onClick={() => setModal(null)}>DONE</button>
         </div>
       )
       case 'security': return (
@@ -1114,13 +1220,27 @@ export default function Dashboard() {
     const dayOfMonth = today.getDate()
     const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
     const pctDaysElapsed = (dayOfMonth / daysInMonth) * 100
-    const priorMonthsAvg = advisor.monthlyTrend.length > 0
-      ? advisor.monthlyTrend.reduce((s, m) => s + (m.expenses || 0), 0) / advisor.monthlyTrend.length
+    // Spending Pace compares THIS month's spend-to-date against LAST
+    // month's actual total (not an average that can include this same
+    // in-progress month, which was quietly always showing 100%).
+    const priorMonths = advisor.monthlyTrend.length > 1 ? advisor.monthlyTrend.slice(0, -1) : []
+    const lastMonth = priorMonths.length > 0 ? priorMonths[priorMonths.length - 1] : null
+    const lastMonthTotal = lastMonth ? (lastMonth.expenses || 0) : null
+    const lastMonthLabel = lastMonth ? lastMonth.month : null
+    const pctOfLastMonthSpent = (lastMonthTotal && lastMonthTotal > 0)
+      ? Math.round((expenses / lastMonthTotal) * 100)
       : null
-    const pctBudgetUsed = (priorMonthsAvg && priorMonthsAvg > 0) ? Math.min(200, (expenses / priorMonthsAvg) * 100) : null
-    const paceAhead = pctBudgetUsed !== null && pctBudgetUsed > pctDaysElapsed + 10
+    const projectedThisMonth = (expenses / dayOfMonth) * daysInMonth
+    const pctVsLastMonth = (lastMonthTotal && lastMonthTotal > 0)
+      ? Math.round(((projectedThisMonth - lastMonthTotal) / lastMonthTotal) * 100)
+      : null
+    const paceAhead = pctVsLastMonth !== null && pctVsLastMonth > 10
+    const paceSlower = pctVsLastMonth !== null && pctVsLastMonth < -10
     const subscriptionsTotal = advisor.subscriptions.reduce((s, sub) => s + sub.amount, 0)
-    const [riskProfile, setRiskProfile] = useState('Balanced')
+    // Simple Mode (Module F): fewer things on screen at once — the three
+    // more detailed/preview cards below collapse into one "More Insights"
+    // toggle instead of all being shown simultaneously.
+    const [showMore, setShowMore] = useState(false)
 
     return (
       <div className="advisor-wrap">
@@ -1134,7 +1254,15 @@ export default function Dashboard() {
 
         <div className="advisor-grid">
           <div className="card advisor-summary-card">
-            <h3 style={{ marginTop: 0 }}>This Month</h3>
+            <div className="card-header-row">
+              <h3 style={{ marginTop: 0, marginBottom: 0 }}>This Month</h3>
+              {advisor.summaryAvailable && (
+                <button type="button" className="read-aloud-btn" aria-label="Read this month's summary aloud"
+                  onClick={() => speak(`This month, your income is PKR ${income.toLocaleString('en-PK')}, your expenses are PKR ${expenses.toLocaleString('en-PK')}, and it is safe to spend PKR ${safeToSpend.toLocaleString('en-PK')} today.`)}>
+                  🔊 Read Aloud
+                </button>
+              )}
+            </div>
             {advisor.summaryAvailable ? (
               <div className="advisor-summary-row">
                 <div className="advisor-stat">
@@ -1150,7 +1278,7 @@ export default function Dashboard() {
                   <strong className={`advisor-stat-value ${net >= 0 ? 'income-text' : 'expense-text'}`}>PKR {net.toLocaleString('en-PK')}</strong>
                 </div>
                 <div className="advisor-stat">
-                  <span className="advisor-stat-label">Safe to Spend</span>
+                  <span className="advisor-stat-label">Safe to Spend <InfoTip text="This is what's left after your income, minus your expenses so far and any bills still due — a rough amount you can spend today without dipping into money you already owe." /></span>
                   <strong className={`advisor-stat-value ${safeToSpend >= 0 ? 'income-text' : 'expense-text'}`}>PKR {safeToSpend.toLocaleString('en-PK')}</strong>
                 </div>
               </div>
@@ -1169,8 +1297,14 @@ export default function Dashboard() {
                 {advisor.monthlyTrend.map(m => (
                   <div key={m.month} className="trend-col">
                     <div className="trend-bars">
-                      <div className="trend-bar income-bar" style={{ height: `${((m.income || 0) / maxTrend) * 100}%` }} title={`Income: PKR ${m.income}`} />
-                      <div className="trend-bar expense-bar" style={{ height: `${((m.expenses || 0) / maxTrend) * 100}%` }} title={`Expenses: PKR ${m.expenses}`} />
+                      <div className="trend-bar-wrap">
+                        <span className="trend-bar-value income-text">{formatCompactPKR(m.income)}</span>
+                        <div className="trend-bar income-bar" style={{ height: `${((m.income || 0) / maxTrend) * 100}%` }} title={`Income: PKR ${m.income}`} />
+                      </div>
+                      <div className="trend-bar-wrap">
+                        <span className="trend-bar-value expense-text">{formatCompactPKR(m.expenses)}</span>
+                        <div className="trend-bar expense-bar" style={{ height: `${((m.expenses || 0) / maxTrend) * 100}%` }} title={`Expenses: PKR ${m.expenses}`} />
+                      </div>
                     </div>
                     <span className="trend-label">{m.month}</span>
                   </div>
@@ -1183,24 +1317,42 @@ export default function Dashboard() {
 
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Spending Pace</h3>
-            {pctBudgetUsed !== null ? (
+            {pctOfLastMonthSpent !== null ? (
               <>
+                <div className="pace-compare-row">
+                  <div className="pace-compare-stat">
+                    <span className="pace-compare-label">{lastMonthLabel} (full month)</span>
+                    <strong className="pace-compare-value">PKR {lastMonthTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong>
+                  </div>
+                  <div className="pace-compare-stat">
+                    <span className="pace-compare-label">This month so far (Day {dayOfMonth} of {daysInMonth})</span>
+                    <strong className="pace-compare-value">PKR {expenses.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong>
+                  </div>
+                </div>
+
+                <div className="pace-row">
+                  <div className="pace-label-row"><span>You've spent this % of last month's total already</span><strong>{pctOfLastMonthSpent}%</strong></div>
+                  <div className="breakdown-bar-track"><div className={`breakdown-bar-fill ${paceAhead ? 'pace-bar-warning' : 'income-bar-fill'}`} style={{ width: `${Math.min(100, pctOfLastMonthSpent)}%` }} /></div>
+                </div>
                 <div className="pace-row">
                   <div className="pace-label-row"><span>Days elapsed this month</span><strong>{pctDaysElapsed.toFixed(0)}%</strong></div>
                   <div className="breakdown-bar-track"><div className="breakdown-bar-fill" style={{ width: `${pctDaysElapsed.toFixed(0)}%` }} /></div>
                 </div>
-                <div className="pace-row">
-                  <div className="pace-label-row"><span>Of typical monthly spend used</span><strong>{pctBudgetUsed.toFixed(0)}%</strong></div>
-                  <div className="breakdown-bar-track"><div className={`breakdown-bar-fill ${paceAhead ? 'pace-bar-warning' : 'income-bar-fill'}`} style={{ width: `${Math.min(100, pctBudgetUsed).toFixed(0)}%` }} /></div>
-                </div>
-                <p className={`advisor-footnote ${paceAhead ? 'pace-warning-text' : ''}`}>
-                  {paceAhead
-                    ? `You're spending faster than usual for this point in the month — on pace for about PKR ${((expenses / dayOfMonth) * daysInMonth).toLocaleString('en-PK', { maximumFractionDigits: 0 })} by month end.`
-                    : "You're tracking close to your usual pace for this point in the month."}
+
+                <p className={`advisor-footnote ${paceAhead ? 'pace-warning-text' : paceSlower ? 'pace-good-text' : ''}`}>
+                  {paceAhead && (
+                    <>⚠️ At this rate, you're on track to spend about <strong>PKR {projectedThisMonth.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong> this month — {pctVsLastMonth}% more than {lastMonthLabel}'s PKR {lastMonthTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}.</>
+                  )}
+                  {paceSlower && (
+                    <>✅ At this rate, you're on track to spend about <strong>PKR {projectedThisMonth.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong> this month — {Math.abs(pctVsLastMonth)}% less than {lastMonthLabel}'s PKR {lastMonthTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}.</>
+                  )}
+                  {!paceAhead && !paceSlower && (
+                    <>You're tracking about the same as {lastMonthLabel} — on pace for roughly PKR {projectedThisMonth.toLocaleString('en-PK', { maximumFractionDigits: 0 })} this month.</>
+                  )}
                 </p>
               </>
             ) : (
-              <p className="advisor-empty">Once a couple of months of history are in, this will show whether you're spending faster or slower than usual for this point in the month.</p>
+              <p className="advisor-empty">Once last month is complete, this will compare how fast you're spending this month against last month's total.</p>
             )}
           </div>
 
@@ -1241,6 +1393,14 @@ export default function Dashboard() {
             })}
           </div>
 
+          {simpleMode && !showMore ? (
+            <div className="card advisor-insights-card">
+              <button type="button" className="more-insights-btn" onClick={() => setShowMore(true)}>
+                Show More Insights (Subscriptions, Utility Usage, AI Tips) <i className="fas fa-chevron-down" style={{ marginLeft: 6 }} />
+              </button>
+            </div>
+          ) : (
+          <>
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Subscriptions & Recurring <span className="preview-tag">Preview</span></h3>
             {advisor.subscriptions.length > 0 ? (
@@ -1274,28 +1434,16 @@ export default function Dashboard() {
               <p className="advisor-empty">Unit-level utility tracking (like the K-Electric app — this month's units vs. the same billing cycle last year) is on the roadmap. Once a biller integration is connected, it'll show up here automatically.</p>
             )}
           </div>
+          </>
+          )}
 
-          <div className="card advisor-invest-card">
-            <h3 style={{ marginTop: 0 }}>Grow Your Money <span className="preview-tag">Educational</span></h3>
-            <p style={{ fontSize: 13, color: '#6b7280', marginTop: 0 }}>Pick a risk comfort level to see an illustrative starting-point split. This is general education, not personalized financial advice.</p>
-            <div className="risk-toggle">
-              {Object.keys(RISK_ALLOCATIONS).map(r => (
-                <button key={r} type="button" className={`risk-btn ${riskProfile === r ? 'active' : ''}`} onClick={() => setRiskProfile(r)}>{r}</button>
-              ))}
+          {(!simpleMode || showMore) && (
+            <div className="card advisor-insights-card">
+              <h3 style={{ marginTop: 0 }}>AI Insights <span className="preview-tag">Preview</span></h3>
+              <div className="insight-item">💡 Insights like "your electricity bill is 20% higher than usual" will appear here once this panel is connected to the NLP engine.</div>
+              <div className="insight-item">📈 As you log income and expenses, FinBud AI will start suggesting a monthly savings target based on your habits.</div>
             </div>
-            {Object.entries(RISK_ALLOCATIONS[riskProfile]).map(([asset, pct]) => (
-              <div key={asset} className="breakdown-row">
-                <div className="breakdown-label-row"><span>{asset}</span><strong>{pct}%</strong></div>
-                <div className="breakdown-bar-track"><div className="breakdown-bar-fill" style={{ width: `${pct}%` }} /></div>
-              </div>
-            ))}
-          </div>
-
-          <div className="card advisor-insights-card">
-            <h3 style={{ marginTop: 0 }}>AI Insights <span className="preview-tag">Preview</span></h3>
-            <div className="insight-item">💡 Insights like "your electricity bill is 20% higher than usual" will appear here once this panel is connected to the NLP engine.</div>
-            <div className="insight-item">📈 As you log income and expenses, FinBud AI will start suggesting a monthly savings target based on your habits.</div>
-          </div>
+          )}
         </div>
       </div>
     )
@@ -1316,7 +1464,13 @@ export default function Dashboard() {
 
         <div className="advisor-grid">
           <div className="card advisor-summary-card">
-            <h3 style={{ marginTop: 0 }}>Net Worth</h3>
+            <div className="card-header-row">
+              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Net Worth</h3>
+              <button type="button" className="read-aloud-btn" aria-label="Read net worth aloud"
+                onClick={() => speak(`Your total net worth is PKR ${netWorth.toLocaleString('en-PK')}. Your FinBud balance is PKR ${(userData.balance || 0).toLocaleString('en-PK')}.`)}>
+                🔊 Read Aloud
+              </button>
+            </div>
             <div className="advisor-summary-row">
               <div className="advisor-stat">
                 <span className="advisor-stat-label">FinBud Balance</span>
@@ -1332,7 +1486,7 @@ export default function Dashboard() {
                 <button type="button" className="edit-assets-link" onClick={() => setModal({ type: 'editAssets' })}>Edit</button>
               </div>
               <div className="advisor-stat">
-                <span className="advisor-stat-label">Total Net Worth</span>
+                <span className="advisor-stat-label">Total Net Worth <InfoTip text="This adds up your FinBud balance, any linked bank accounts, and other assets you've told us about — a rough picture of everything you own through FinBud." /></span>
                 <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {netWorth.toLocaleString('en-PK')}</strong>
               </div>
             </div>
@@ -1516,28 +1670,31 @@ export default function Dashboard() {
         .advisor-insights-card { grid-column:1/-1; }
         .preview-tag { font-size:10px; font-weight:700; background:var(--secondary-purple); color:var(--primary-purple); padding:3px 8px; border-radius:20px; text-transform:uppercase; margin-left:8px; vertical-align:middle; }
         .insight-item { background:var(--secondary-purple); padding:14px 16px; border-radius:8px; font-size:13px; color:var(--text-dark); margin-top:10px; line-height:1.5; }
-        .trend-chart { display:flex; align-items:flex-end; gap:14px; height:160px; margin-top:10px; padding-top:10px; }
+        .trend-chart { display:flex; align-items:flex-end; gap:14px; height:180px; margin-top:10px; padding-top:20px; }
         .trend-col { display:flex; flex-direction:column; align-items:center; gap:8px; flex:1; height:100%; }
         .trend-bars { display:flex; align-items:flex-end; gap:3px; height:100%; width:100%; justify-content:center; }
+        .trend-bar-wrap { display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; }
+        .trend-bar-value { font-size:10px; font-weight:700; margin-bottom:3px; white-space:nowrap; }
         .trend-bar { width:10px; border-radius:3px 3px 0 0; min-height:2px; }
         .trend-bar.income-bar { background:var(--income); }
         .trend-bar.expense-bar { background:var(--expense); }
         .trend-label { font-size:11px; color:#6b7280; font-weight:600; }
         .bank-detect-note { font-size:12px; color:var(--primary-purple); background:var(--secondary-purple); padding:8px 12px; border-radius:6px; margin-top:6px; }
         .advisor-footnote { font-size:12px; color:#6b7280; margin:12px 0 0; line-height:1.5; }
-        .advisor-invest-card { grid-column:1/-1; }
-        .risk-toggle { display:flex; gap:8px; margin:14px 0 16px; }
-        .risk-btn { flex:1; padding:10px; border-radius:8px; border:1.5px solid rgba(92,45,145,0.3); background:#fff; color:var(--primary-purple); font-weight:700; font-size:12px; text-transform:uppercase; cursor:pointer; }
-        .risk-btn.active { background:var(--primary-purple); color:#fff; border-color:var(--primary-purple); }
         .wallet-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
         .wallet-row { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid var(--secondary-purple); }
         .wallet-row:last-child { border-bottom:none; }
         .wallet-status-pill { font-size:11px; font-weight:700; text-transform:uppercase; padding:4px 10px; border-radius:20px; background:rgba(16,185,129,0.12); color:var(--income); }
         .wallet-status-pill.locked { background:rgba(185,28,28,0.12); color:var(--danger); }
+        .pace-compare-row { display:flex; gap:20px; margin-bottom:18px; flex-wrap:wrap; }
+        .pace-compare-stat { flex:1; min-width:140px; background:var(--secondary-purple); border-radius:8px; padding:12px 14px; }
+        .pace-compare-label { display:block; font-size:11px; font-weight:600; color:#6b7280; text-transform:uppercase; margin-bottom:6px; }
+        .pace-compare-value { font-size:18px; color:var(--primary-purple); }
         .pace-row { margin-bottom:16px; }
         .pace-label-row { display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; }
         .pace-bar-warning { background:var(--warning) !important; }
         .pace-warning-text { color:var(--warning); font-weight:600; }
+        .pace-good-text { color:var(--income); font-weight:600; }
         .edit-assets-link { background:none; border:none; color:var(--primary-purple); font-size:11px; font-weight:700; text-transform:uppercase; text-decoration:underline; cursor:pointer; padding:2px 0; margin-top:2px; align-self:flex-start; }
         .sidebar-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:transparent; z-index:150; display:none; }
         .sidebar-overlay.visible { display:block; }
@@ -1586,6 +1743,76 @@ export default function Dashboard() {
         .receipt-print .r-header { text-align:center; margin-bottom:20px; }
         .receipt-print .r-header h2 { color:#5c2d91; margin:0; }
         .receipt-print .r-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #eee; font-size:14px; }
+
+        /* ══════════ ACCESSIBILITY (Module F) ══════════ */
+
+        /* Sidebar text-size control */
+        .text-size-control { padding:16px 24px 4px; margin-top:12px; border-top:1px solid var(--secondary-purple); }
+        .text-size-label { font-size:11px; font-weight:700; color:#9aa0ab; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:8px; }
+        .text-size-btns { display:flex; gap:6px; }
+        .text-size-btn { flex:1; padding:8px 0; border-radius:8px; border:1.5px solid rgba(92,45,145,0.25); background:#fff; color:var(--primary-purple); font-weight:700; cursor:pointer; font-size:13px; }
+        .text-size-btn.active { background:var(--primary-purple); color:#fff; border-color:var(--primary-purple); }
+
+        /* Settings toggle switches */
+        .a11y-toggle-row { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:14px 0; border-bottom:1px solid var(--secondary-purple); }
+        .toggle-switch { width:46px; height:26px; border-radius:20px; background:#d1d5db; border:none; cursor:pointer; position:relative; flex-shrink:0; transition:background 0.2s; }
+        .toggle-switch.on { background:var(--primary-purple); }
+        .toggle-knob { position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:transform 0.2s; box-shadow:0 1px 3px rgba(0,0,0,0.3); }
+        .toggle-switch.on .toggle-knob { transform:translateX(20px); }
+
+        /* One-tap jargon explainer */
+        .info-tip-wrap { position:relative; display:inline-block; }
+        .info-tip-btn { width:16px; height:16px; border-radius:50%; border:1px solid #9aa0ab; background:#fff; color:#6b7280; font-size:10px; font-weight:700; line-height:1; cursor:pointer; padding:0; display:inline-flex; align-items:center; justify-content:center; vertical-align:middle; margin-left:4px; }
+        .info-tip-bubble { position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); width:220px; background:#1a1a1a; color:#fff; font-size:12px; font-weight:400; text-transform:none; letter-spacing:normal; line-height:1.5; padding:10px 12px; border-radius:8px; z-index:60; }
+
+        /* Read-aloud button */
+        .card-header-row { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+        .read-aloud-btn { background:var(--secondary-purple); color:var(--primary-purple); border:none; border-radius:20px; padding:6px 14px; font-size:12px; font-weight:700; cursor:pointer; }
+
+        /* Simple Mode collapse toggle */
+        .more-insights-btn { width:100%; background:none; border:1.5px dashed rgba(92,45,145,0.3); border-radius:8px; padding:18px; color:var(--primary-purple); font-weight:700; font-size:13px; cursor:pointer; }
+
+        /* ── High contrast override ── */
+        html[data-contrast="high"] {
+          --primary-purple: #3d1a66;
+          --secondary-purple: #e8e8e8;
+          --text-dark: #000000;
+          --bg: #ffffff;
+          --card: #ffffff;
+          --income: #067a4f;
+          --expense: #c0231a;
+          --warning: #a35a00;
+        }
+        html[data-contrast="high"] .card,
+        html[data-contrast="high"] .main-balance-card,
+        html[data-contrast="high"] .transactions-card,
+        html[data-contrast="high"] .modal-box { border:1.5px solid #000; }
+        html[data-contrast="high"] .left-nav { border-right:2px solid #000; }
+        html[data-contrast="high"] .action-btn { border:2px solid #000; }
+
+        /* ── Text size override (applies to the numbers/labels people rely on most) ── */
+        html[data-font-size="large"] .balance-value,
+        html[data-font-size="large"] .currency { font-size:36px; }
+        html[data-font-size="large"] .action-btn { font-size:18px; padding:34px 20px; }
+        html[data-font-size="large"] .advisor-stat-value { font-size:30px; }
+        html[data-font-size="large"] .advisor-stat-label { font-size:14px; }
+        html[data-font-size="large"] .tx-table { font-size:16px; }
+        html[data-font-size="large"] .card h3, html[data-font-size="large"] .advisor-title { font-size:1.25em; }
+        html[data-font-size="large"] .modal-box label,
+        html[data-font-size="large"] .modal-box input,
+        html[data-font-size="large"] .modal-box select { font-size:16px; }
+        html[data-font-size="large"] .left-nav-list li { font-size:17px; padding:16px; }
+
+        html[data-font-size="small"] .balance-value,
+        html[data-font-size="small"] .currency { font-size:22px; }
+        html[data-font-size="small"] .action-btn { font-size:14px; padding:22px 16px; }
+        html[data-font-size="small"] .advisor-stat-value { font-size:19px; }
+        html[data-font-size="small"] .tx-table { font-size:12px; }
+
+        /* ── Simple Mode: bigger, calmer quick actions on Home ── */
+        html[data-simple-mode="true"] .action-btn { padding:38px 20px; font-size:17px; }
+        html[data-simple-mode="true"] .preview-tag { display:none; }
+
         @media(max-width:900px) {
           .app-shell { flex-direction:column; }
           .left-nav { width:100%; height:auto; position:sticky; top:0; z-index:20; flex-direction:row; align-items:center; padding:10px 16px; overflow-x:auto; }
@@ -1593,6 +1820,10 @@ export default function Dashboard() {
           .left-nav-list { flex-direction:row; padding:0; }
           .left-nav-list li span { display:none; }
           .left-nav-list li { padding:10px 14px; }
+          .text-size-control { padding:0 0 0 12px; margin-top:0; border-left:1px solid var(--secondary-purple); }
+          .text-size-label { display:none; }
+          .text-size-btns { gap:4px; }
+          .text-size-btn { padding:6px 8px; font-size:11px; }
           .topbar{padding:15px 20px;}
           .dashboard-grid{grid-template-columns:1fr;padding:20px;}
           .quick-actions-grid{grid-template-columns:1fr;}
@@ -1623,6 +1854,18 @@ export default function Dashboard() {
               <i className="fas fa-wallet" /> <span>Wallet</span>
             </li>
           </ul>
+
+          <div className="text-size-control">
+            <span className="text-size-label">Text Size</span>
+            <div className="text-size-btns" role="group" aria-label="Adjust text size">
+              <button type="button" className={`text-size-btn ${fontSize === 'small' ? 'active' : ''}`}
+                aria-label="Small text" onClick={() => setFontSize('small')}>A-</button>
+              <button type="button" className={`text-size-btn ${fontSize === 'default' ? 'active' : ''}`}
+                aria-label="Default text size" onClick={() => setFontSize('default')}>A</button>
+              <button type="button" className={`text-size-btn ${fontSize === 'large' ? 'active' : ''}`}
+                aria-label="Large text" onClick={() => setFontSize('large')}>A+</button>
+            </div>
+          </div>
         </nav>
 
         <div className="main-content">
@@ -1630,11 +1873,11 @@ export default function Dashboard() {
             <header className="topbar">
               <h1 className="topbar-title">{activeView === 'home' ? 'Dashboard' : activeView === 'advisor' ? 'Financial Advisor' : 'Wallet'}</h1>
               <div className="topbar-right">
-                <div className="bell-container" onClick={() => setRemindersOpen(o => !o)}>
+                <div className="bell-container" role="button" tabIndex={0} aria-label={`Bill reminders, ${reminders.length} pending`} onClick={() => setRemindersOpen(o => !o)}>
                   <i className="fas fa-bell" />
                   {reminders.length > 0 && <span className="reminder-badge">{reminders.length}</span>}
                 </div>
-                <div className="profile-area" onClick={() => setSidebarOpen(true)}>
+                <div className="profile-area" role="button" tabIndex={0} aria-label="Open account menu" onClick={() => setSidebarOpen(true)}>
                   <span>{userData.name}</span>
                   <div className="profile-avatar">{userData.initials}</div>
                 </div>
@@ -1678,11 +1921,6 @@ export default function Dashboard() {
                     <button className="action-btn" onClick={() => setModal({ type: 'payBill1' })}>PAY BILL</button>
                     <button className="action-btn" onClick={() => setModal({ type: 'rewards' })}>REWARDS</button>
                     <button className="action-btn" onClick={() => setModal({ type: 'redeemPoints' })}>REDEEM POINTS</button>
-                    {hasCard && (
-                      <button className="action-btn danger full-width" onClick={() => navigate('/chat?action=emergency')}>
-                        🚨 EMERGENCY — LOCK CARDS
-                      </button>
-                    )}
                   </div>
                 </section>
 
@@ -1714,7 +1952,7 @@ export default function Dashboard() {
                                 <td className={tx.amount < 0 ? 'expense-text' : 'income-text'}>PKR {Math.abs(tx.amount).toLocaleString('en-PK')}</td>
                                 <td>
                                   <div className="tx-menu-wrap">
-                                    <button className="tx-menu-btn" onClick={e => { e.stopPropagation(); setOpenMenuId(openMenuId === menuId ? null : menuId) }}>⋯</button>
+                                    <button className="tx-menu-btn" aria-label={`Options for ${tx.description}`} onClick={e => { e.stopPropagation(); setOpenMenuId(openMenuId === menuId ? null : menuId) }}>⋯</button>
                                     <div className={`tx-menu-dropdown ${openMenuId === menuId ? 'open' : ''}`}>
                                       <a onClick={() => { setOpenMenuId(null); downloadReceipt(tx.id) }}>Download Receipt</a>
                                     </div>
@@ -1744,7 +1982,7 @@ export default function Dashboard() {
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)} />
 
       <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)}>×</button>
+        <button className="sidebar-close-btn" aria-label="Close menu" onClick={() => setSidebarOpen(false)}>×</button>
         <div className="sidebar-header">
           <div className="profile-avatar" style={{ width: 60, height: 60, fontSize: 20 }}>{userData.initials}</div>
           <span className="profile-name-large">{userData.name}</span>
@@ -1765,7 +2003,7 @@ export default function Dashboard() {
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setModal(null)}>×</button>
+            <button className="modal-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
             {renderModalContent()}
           </div>
         </div>
