@@ -43,7 +43,9 @@ from features import (
     validate_provider, get_saved_biller_ref, get_product, get_redemption_tier,
     # ── v3 additions (Financial Advisor + Digital Wallet) ─────────────────────
     get_income_vs_expense, get_income_by_source,
-    get_monthly_trend, get_pg_conn, release_pg_conn
+    get_monthly_trend, get_pg_conn, release_pg_conn,
+    # ── v4 additions (Credit Intelligence) ───────────────────────────────────
+    generate_credit_score
 )
 
 from nlp_module import BankAIConversation
@@ -126,6 +128,8 @@ def init_user_tables():
         bill_id          VARCHAR(30),
         status           VARCHAR(20) DEFAULT 'completed',
         created_at       VARCHAR(64),
+        category         VARCHAR(60),
+        fee              NUMERIC(15,2) DEFAULT 0,
         FOREIGN KEY (account_number) REFERENCES dashboard_users(account_number)
     )''')
 
@@ -166,15 +170,32 @@ def init_user_tables():
         created_at     VARCHAR(64)
     )''')
 
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS notifications (
+        id             SERIAL PRIMARY KEY,
+        account_number VARCHAR(30),
+        message        TEXT,
+        notif_type     VARCHAR(30) DEFAULT 'transaction',
+        is_read        BOOLEAN DEFAULT FALSE,
+        created_at     VARCHAR(64)
+    )''')
+
     conn.commit()
 
-    # ── Safe column addition: other_assets may not exist on older databases ──
-    try:
-        c.execute("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS other_assets NUMERIC(15,2) DEFAULT 0")
-        conn.commit()
-    except Exception as ex:
-        conn.rollback()
-        print(f"[init_user_tables] other_assets column already present, skipping: {ex}")
+    # ── Safe column additions for existing databases ───────────────────────────
+    for stmt in [
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS other_assets NUMERIC(15,2) DEFAULT 0",
+        "ALTER TABLE dashboard_transactions ADD COLUMN IF NOT EXISTS category VARCHAR(60)",
+        "ALTER TABLE dashboard_transactions ADD COLUMN IF NOT EXISTS fee NUMERIC(15,2) DEFAULT 0",
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS cardholder_name TEXT",
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS expiry TEXT",
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS nickname TEXT",
+    ]:
+        try:
+            c.execute(stmt); conn.commit()
+        except Exception as ex:
+            conn.rollback()
+            print(f"[init_user_tables] skipping: {ex}")
 
     release_db(conn)
 
@@ -182,25 +203,6 @@ def init_user_tables():
 # Initialize tables from both modules
 init_user_tables()
 init_db()
-
-
-# ============= TEMPLATE ROUTES =============
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/dashboard')
-def dashboard():
-    if 'user_id' not in session:
-        return redirect(url_for('index'))
-    return render_template('dashboard.html')
-
-@app.route('/chat')
-def chat():
-    if 'user_id' not in session:
-        return redirect(url_for('index'))
-    return render_template('chat.html')
-
 
 # ============= AUTHENTICATION API =============
 @app.route('/api/auth/register', methods=['POST'])
@@ -880,6 +882,26 @@ def topup_balance():
 
 
 # ============= TRANSACTION API =============
+
+# Valid expense categories (per mentor MoM Session 3)
+EXPENSE_CATEGORIES = [
+    'Utility Bills', 'Grocery', 'Household Staff',
+    'Society Maintenance', 'Car & Fuel', 'Medical',
+    'Education', 'Entertainment', 'Rent', 'Transfer', 'Other'
+]
+
+
+def _calc_transfer_fee(amount, is_finbud_user):
+    """
+    FinBud → FinBud  : free (0)
+    FinBud → External: PKR 25 flat for amounts < 10,000
+                       0.15% for amounts >= 10,000
+    """
+    if is_finbud_user:
+        return 0.0
+    return 25.0 if amount < 10000 else round(amount * 0.0015, 2)
+
+
 @app.route('/api/transaction/create', methods=['POST'])
 def create_transaction():
     if 'user_id' not in session:
@@ -890,6 +912,11 @@ def create_transaction():
         account_number   = session['account_number']
         transaction_type = data.get('type')
         amount           = float(data.get('amount'))
+        category         = data.get('category', 'Other')
+
+        # Validate category
+        if category not in EXPENSE_CATEGORIES:
+            category = 'Other'
 
         if not all([transaction_type, amount]):
             return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -910,45 +937,80 @@ def create_transaction():
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
         # PostgreSQL returns NUMERIC columns as decimal.Decimal — cast to plain
-        # float/int so subtraction/addition against `amount` (a float) works.
+        # float/int so subtraction/addition against `amount`/`fee` (floats)
+        # below doesn't throw "unsupported operand type(s) for -".
         user['balance'] = float(user['balance'])
         user['points']  = int(user['points'])
 
-        if user['balance'] < amount:
+        fee = 0.0
+        if transaction_type == 'transfer':
+            # Check if recipient is a FinBud user
+            recipient_account = data.get('recipient_account', '')
+            c.execute(
+                "SELECT COUNT(*) AS cnt FROM dashboard_users WHERE account_number=%s",
+                (recipient_account,)
+            )
+            is_finbud_user = c.fetchone()['cnt'] > 0
+            fee = _calc_transfer_fee(amount, is_finbud_user)
+
+        total_deducted = amount + fee
+
+        if user['balance'] < total_deducted:
             release_db(conn)
-            return jsonify({'success': False, 'message': 'Insufficient funds'}), 400
+            return jsonify({
+                'success': False,
+                'message': f'Insufficient funds. Amount: PKR {amount:,.0f} + Fee: PKR {fee:,.0f} = PKR {total_deducted:,.0f}'
+            }), 400
 
         points_earned = int(amount // 1000) * 5
+        now_iso       = datetime.utcnow().isoformat()
 
         if transaction_type == 'transfer':
-            description       = f"Transfer to {data.get('recipient', 'Unknown')}"
-            recipient_account = data.get('recipient_account', 'N/A')
+            description = f"Transfer to {data.get('recipient', 'Unknown')}"
+            if fee > 0:
+                description += f" (Fee: PKR {fee:,.0f})"
             c.execute("""
                 INSERT INTO dashboard_transactions
-                    (account_number, transaction_type, description, amount, recipient, status, created_at)
-                VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s)
+                    (account_number, transaction_type, description, amount,
+                     recipient, status, created_at, category, fee)
+                VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, %s, %s)
                 RETURNING id
-            """, (account_number, description, -amount, recipient_account,
-                  datetime.utcnow().isoformat()))
+            """, (account_number, description, -total_deducted,
+                  recipient_account, now_iso, category, fee))
         else:
             biller      = data.get('biller')
             description = f"{biller} Bill Payment"
             c.execute("""
                 INSERT INTO dashboard_transactions
-                    (account_number, transaction_type, description, amount, biller, bill_id, status, created_at)
-                VALUES (%s, 'bill', %s, %s, %s, %s, 'completed', %s)
+                    (account_number, transaction_type, description, amount,
+                     biller, bill_id, status, created_at, category, fee)
+                VALUES (%s, 'bill', %s, %s, %s, %s, 'completed', %s, %s, 0)
                 RETURNING id
             """, (account_number, description, -amount, biller,
-                  data.get('billId', 'N/A'), datetime.utcnow().isoformat()))
+                  data.get('billId', 'N/A'), now_iso, category))
 
         transaction_id = c.fetchone()['id']
 
-        new_balance = user['balance'] - amount
+        new_balance = user['balance'] - total_deducted
         new_points  = user['points'] + points_earned
         c.execute(
             "UPDATE dashboard_users SET balance=%s, points=%s WHERE account_number=%s",
             (new_balance, new_points, account_number)
         )
+
+        # Insert transaction notification
+        notif_msg = (
+            f"PKR {amount:,.0f} sent to {data.get('recipient', 'Unknown')}. "
+            f"Remaining balance: PKR {new_balance:,.0f}."
+            if transaction_type == 'transfer'
+            else f"Bill payment of PKR {amount:,.0f} to {data.get('biller', 'biller')} successful. "
+                 f"Remaining balance: PKR {new_balance:,.0f}."
+        )
+        c.execute("""
+            INSERT INTO notifications(account_number, message, notif_type, is_read, created_at)
+            VALUES (%s, %s, 'transaction', FALSE, %s)
+        """, (account_number, notif_msg, now_iso))
+
         conn.commit()
         release_db(conn)
 
@@ -964,7 +1026,9 @@ def create_transaction():
             'transaction_id': transaction_id,
             'new_balance':    float(new_balance),
             'new_points':     new_points,
-            'points_earned':  points_earned
+            'points_earned':  points_earned,
+            'fee':            fee,
+            'fee_applied':    fee > 0
         })
 
     except Exception as e:
@@ -983,7 +1047,7 @@ def transaction_history():
         conn = get_db()
         c    = conn.cursor()
         c.execute("""
-            SELECT id, transaction_type, description, amount, created_at
+            SELECT id, transaction_type, description, amount, created_at, category
             FROM dashboard_transactions
             WHERE account_number=%s
             ORDER BY created_at DESC
@@ -995,10 +1059,12 @@ def transaction_history():
             date_obj       = datetime.fromisoformat(row['created_at'])
             formatted_date = date_obj.strftime('%b %d, %Y')
             transactions.append({
-                'id':          row['id'],
-                'date':        formatted_date,
-                'description': row['description'],
-                'amount':      float(row['amount'])
+                'id':               row['id'],
+                'date':             formatted_date,
+                'description':      row['description'],
+                'amount':           float(row['amount']),
+                'transaction_type': row['transaction_type'],
+                'category':         row['category']
             })
 
         release_db(conn)
@@ -1020,7 +1086,7 @@ def transaction_receipt(transaction_id):
         c    = conn.cursor()
         c.execute("""
             SELECT id, account_number, transaction_type, description, amount,
-                   recipient, biller, bill_id, status, created_at
+                   recipient, biller, bill_id, status, created_at, category, fee
             FROM dashboard_transactions
             WHERE id=%s AND account_number=%s
         """, (transaction_id, account_number))
@@ -1043,6 +1109,8 @@ def transaction_receipt(transaction_id):
             'biller':           row['biller'],
             'bill_id':          row['bill_id'],
             'status':           row['status'],
+            'category':         row['category'],
+            'fee':              float(row['fee']) if row['fee'] is not None else 0.0,
             'date':             date_obj.strftime('%b %d, %Y'),
             'time':             date_obj.strftime('%I:%M %p'),
             'created_at':       row['created_at']
@@ -1771,6 +1839,151 @@ def set_other_assets():
 
     except Exception as e:
         print(f"[set_other_assets] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v4  — Credit Intelligence (C.I.) API
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/credit-score', methods=['GET'])
+def credit_score():
+    """
+    Returns the computed credit score for the logged-in user.
+
+    Response shape:
+    {
+        "success": true,
+        "score":   720,
+        "label":   "Good",
+        "color":   "#84cc16",
+        "advice":  "...",
+        "breakdown": {
+            "late_payments":   0,
+            "balance":         75000.00,
+            "transactions_6m": 14,
+            "reward_points":   350
+        }
+    }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        result = generate_credit_score(session['account_number'])
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        print(f"[credit_score] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v5  — Notifications, Expense Categories, Updated Safe-to-Spend
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/notifications', methods=['GET'])
+def get_notifications():
+    """
+    Returns the latest notifications for the logged-in user.
+    Query param: ?limit=20  (default 20)
+    Each notification includes message, type, is_read, created_at.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        account_number = session['account_number']
+        limit          = request.args.get('limit', 20, type=int)
+
+        conn = get_db(); c = conn.cursor()
+        c.execute("""
+            SELECT id, message, notif_type, is_read, created_at
+            FROM notifications
+            WHERE account_number=%s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (account_number, limit))
+        rows = c.fetchall(); release_db(conn)
+
+        notifications = [
+            {
+                'id':         r['id'],
+                'message':    r['message'],
+                'type':       r['notif_type'],
+                'is_read':    r['is_read'],
+                'created_at': r['created_at']
+            }
+            for r in rows
+        ]
+        return jsonify({'success': True, 'notifications': notifications})
+
+    except Exception as e:
+        print(f"[get_notifications] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/notifications/mark-read', methods=['POST'])
+def mark_notifications_read():
+    """
+    Marks all notifications as read for the logged-in user.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute(
+            "UPDATE notifications SET is_read=TRUE WHERE account_number=%s",
+            (session['account_number'],)
+        )
+        conn.commit(); release_db(conn)
+        return jsonify({'success': True})
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/transaction/categories', methods=['GET'])
+def get_expense_categories():
+    """
+    Returns the list of valid expense categories for the frontend dropdowns.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    return jsonify({'success': True, 'categories': EXPENSE_CATEGORIES})
+
+
+@app.route('/api/financial/spending-by-category', methods=['GET'])
+def spending_by_category_detailed():
+    """
+    Returns this month's spending grouped by the new category column.
+    Used for the detailed expense breakdown chart in Financial Advisor.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        account_number = session['account_number']
+        now            = datetime.utcnow()
+        month_start    = datetime(now.year, now.month, 1).isoformat()
+
+        conn = get_db(); c = conn.cursor()
+        c.execute("""
+            SELECT
+                COALESCE(category, 'Other') AS category,
+                COALESCE(SUM(ABS(amount)), 0) AS total
+            FROM dashboard_transactions
+            WHERE account_number=%s AND amount < 0 AND created_at >= %s
+            GROUP BY category
+            ORDER BY total DESC
+        """, (account_number, month_start))
+        rows = c.fetchall(); release_db(conn)
+
+        breakdown = {r['category']: round(float(r['total']), 2) for r in rows}
+        return jsonify({'success': True, 'breakdown': breakdown})
+
+    except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
 

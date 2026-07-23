@@ -82,6 +82,38 @@ function formatCompactPKR(n) {
   return `${Math.round(v)}`
 }
 
+// Icon + severity styling per anomaly type returned by detect_anomalies().
+// The backend already writes a human-readable `message` for each one, so
+// the frontend just needs to decide how urgent it looks.
+const ANOMALY_CONFIG = {
+  new_biller:     { icon: '🆕', severity: 'info',    label: 'New Biller' },
+  amount_spike:   { icon: '📈', severity: 'warning', label: 'Amount Spike' },
+  duplicate_bill: { icon: '📋', severity: 'warning', label: 'Duplicate Bill' },
+  large_transfer: { icon: '💸', severity: 'danger',  label: 'Large Transfer' },
+  rapid_fire:     { icon: '⚡', severity: 'danger',  label: 'Rapid Transactions' },
+  odd_hours:      { icon: '🌙', severity: 'danger',  label: 'Unusual Hours' },
+}
+
+// Fallback list — matches app.py's EXPENSE_CATEGORIES exactly (per mentor
+// MoM Session 3). Used only until /api/transaction/categories responds;
+// after that, the dropdown uses whatever the backend actually validates
+// against, so the two can never drift out of sync again.
+const FALLBACK_EXPENSE_CATEGORIES = [
+  'Transfer', 'Grocery', 'Utility Bills', 'Rent', 'Household Staff',
+  'Society Maintenance', 'Car & Fuel', 'Medical', 'Education', 'Entertainment', 'Other'
+]
+
+// What to actually print in transaction history / receipts. The backend now
+// stores a real `category` per transaction (dashboard_transactions.category),
+// so a categorized transfer (e.g. "Grocery") shows that instead of the raw
+// "Transfer to X" description — no client-side guessing needed.
+function getTransactionDisplayLabel(tx) {
+  if (tx?.transaction_type === 'transfer' && tx?.category && tx.category !== 'Transfer') {
+    return tx.category
+  }
+  return tx?.description || ''
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const [userData, setUserData] = useState({ name: 'User', initials: 'U', balance: 0, isMasked: true, userId: '', points: 0, email: '' })
@@ -95,6 +127,7 @@ export default function Dashboard() {
   const [pendingBill, setPendingBill] = useState(null)
   const [openMenuId, setOpenMenuId] = useState(null)
   const [hasCard, setHasCard] = useState(false)
+  const [expenseCategories, setExpenseCategories] = useState(FALLBACK_EXPENSE_CATEGORIES)
   const [activeView, setActiveView] = useState('home')
   const [advisor, setAdvisor] = useState({
     loaded: false,
@@ -106,7 +139,11 @@ export default function Dashboard() {
     trendAvailable: true,
     utilityUsage: null,
     utilityAvailable: true,
-    subscriptions: []
+    subscriptions: [],
+    creditScore: null,
+    creditScoreAvailable: true,
+    anomalies: [],
+    anomaliesAvailable: true
   })
   const [wallet, setWallet] = useState({
     loaded: false,
@@ -153,6 +190,43 @@ export default function Dashboard() {
     window.speechSynthesis.speak(utterance)
   }
 
+  // ── IN-APP TRANSACTION NOTIFICATIONS ────────────────────
+  // Two pieces: a transient toast right after any money-moving action
+  // completes, and a persistent "Activity" dropdown beside the bill
+  // reminders bell that lists recent transactions (reuses the same data
+  // already fetched for the Home page transaction table).
+  const [toast, setToast] = useState(null)
+  const toastTimerRef = useRef(null)
+  function showToast(message, type = 'success') {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToast({ message, type })
+    toastTimerRef.current = setTimeout(() => setToast(null), 4500)
+  }
+  const [txNotifOpen, setTxNotifOpen] = useState(false)
+  const [notifications, setNotifications] = useState([])
+  const [notifUnreadCount, setNotifUnreadCount] = useState(0)
+
+  async function loadNotifications() {
+    try {
+      const res = await fetch('/api/notifications?limit=20', { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) {
+        setNotifications(data.notifications || [])
+        setNotifUnreadCount((data.notifications || []).filter(n => !n.is_read).length)
+      }
+    } catch {}
+  }
+
+  async function openNotifications() {
+    setTxNotifOpen(o => !o)
+    if (!txNotifOpen && notifUnreadCount > 0) {
+      try {
+        await fetch('/api/notifications/mark-read', { method: 'POST', credentials: 'include' })
+        setNotifUnreadCount(0)
+      } catch {}
+    }
+  }
+
   useEffect(() => { loadAll() }, [])
 
   useEffect(() => {
@@ -175,6 +249,8 @@ export default function Dashboard() {
       loadReminders()
       loadBreakdown()
       checkCard()
+      loadCategories()
+      loadNotifications()
     } catch { navigate('/') }
   }
 
@@ -184,6 +260,16 @@ export default function Dashboard() {
       const data = await res.json()
       setHasCard(!!data.has_card)
     } catch { setHasCard(false) }
+  }
+
+  async function loadCategories() {
+    try {
+      const res = await fetch('/api/transaction/categories', { credentials: 'include' })
+      const data = await res.json()
+      if (data.success && Array.isArray(data.categories) && data.categories.length > 0) {
+        setExpenseCategories(data.categories)
+      }
+    } catch { /* keep FALLBACK_EXPENSE_CATEGORIES */ }
   }
 
   async function loadTransactions() {
@@ -203,9 +289,13 @@ export default function Dashboard() {
 
   async function loadBreakdown() {
     try {
-      const res = await fetch('/api/financial/spending-category', { credentials: 'include' })
+      // Anum's backend now aggregates this server-side from the real
+      // `category` column on dashboard_transactions (see
+      // /api/financial/spending-by-category), so this reflects whatever
+      // category a bill or a categorized transfer was actually saved under.
+      const res = await fetch('/api/financial/spending-by-category', { credentials: 'include' })
       const data = await res.json()
-      setBreakdown(data.spending_by_category || {})
+      if (data.success) setBreakdown(data.breakdown || {})
     } catch {}
   }
 
@@ -214,11 +304,13 @@ export default function Dashboard() {
     // (shared alongside this file) specs them out. Until they exist, each
     // section below falls back to a friendly "coming soon" state instead
     // of breaking, the same pattern already used for topup/email-receipt.
-    const [summaryRes, incomeRes, trendRes, utilityRes] = await Promise.allSettled([
+    const [summaryRes, incomeRes, trendRes, utilityRes, creditRes, anomalyRes] = await Promise.allSettled([
       fetch('/api/financial/income-vs-expense', { credentials: 'include' }),
       fetch('/api/financial/income-by-source', { credentials: 'include' }),
       fetch('/api/financial/monthly-trend', { credentials: 'include' }),
-      fetch('/api/financial/utility-usage', { credentials: 'include' })
+      fetch('/api/financial/utility-usage', { credentials: 'include' }),
+      fetch('/api/credit-score', { credentials: 'include' }),
+      fetch(`/insights/anomalies?account=${encodeURIComponent(userData.userId)}`, { credentials: 'include' })
     ])
 
     let summary = null, summaryAvailable = false
@@ -241,7 +333,21 @@ export default function Dashboard() {
     if (trendRes.status === 'fulfilled' && trendRes.value.ok) {
       try {
         const d = await trendRes.value.json()
-        if (d.success) { monthlyTrend = d.trend || []; trendAvailable = true }
+        if (d.success) {
+          // Belt-and-suspenders: sort by actual calendar order using the
+          // "Mon YY" label, not whatever order the backend sent — a plain
+          // string sort of month names is NOT chronological (e.g. "Apr"
+          // would sort before "Jan"), so parse each label properly.
+          const MONTH_INDEX = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 }
+          monthlyTrend = [...(d.trend || [])].sort((a, b) => {
+            const [am, ay] = (a.month || '').split(' ')
+            const [bm, by] = (b.month || '').split(' ')
+            const aKey = Number(ay) * 12 + (MONTH_INDEX[am] ?? 0)
+            const bKey = Number(by) * 12 + (MONTH_INDEX[bm] ?? 0)
+            return aKey - bKey
+          })
+          trendAvailable = true
+        }
       } catch {}
     }
 
@@ -262,7 +368,23 @@ export default function Dashboard() {
       }
     } catch {}
 
-    setAdvisor({ loaded: true, summary, summaryAvailable, incomeBreakdown, incomeAvailable, monthlyTrend, trendAvailable, utilityUsage, utilityAvailable, subscriptions })
+    let creditScore = null, creditScoreAvailable = false
+    if (creditRes.status === 'fulfilled' && creditRes.value.ok) {
+      try {
+        const d = await creditRes.value.json()
+        if (d.success) { creditScore = d; creditScoreAvailable = true }
+      } catch {}
+    }
+
+    let anomalies = [], anomaliesAvailable = false
+    if (anomalyRes.status === 'fulfilled' && anomalyRes.value.ok) {
+      try {
+        const d = await anomalyRes.value.json()
+        if (Array.isArray(d.anomalies)) { anomalies = d.anomalies; anomaliesAvailable = true }
+      } catch {}
+    }
+
+    setAdvisor({ loaded: true, summary, summaryAvailable, incomeBreakdown, incomeAvailable, monthlyTrend, trendAvailable, utilityUsage, utilityAvailable, subscriptions, creditScore, creditScoreAvailable, anomalies, anomaliesAvailable })
   }
 
   async function loadWalletData() {
@@ -363,6 +485,7 @@ export default function Dashboard() {
     const [manualBank, setManualBank] = useState('')
     const [amount, setAmount] = useState('')
     const [purpose, setPurpose] = useState('Rent')
+    const [category, setCategory] = useState('Transfer')
     const [error, setError] = useState('')
     const [usage, setUsage] = useState({ remaining: DAILY_TRANSFER_LIMIT })
 
@@ -390,7 +513,7 @@ export default function Dashboard() {
       if (method === 'Account Number' && !manualBank) { setError('Please select the destination bank.'); return }
       if (isNaN(amt) || amt <= 0) { setError('Please enter a valid positive amount.'); return }
       if (amt > usage.remaining) { setError(`Exceeds your remaining daily limit of PKR ${usage.remaining.toLocaleString('en-PK')}.`); return }
-      setPendingTransfer({ method, recipientName, recipientIdentifier: recipientId, destinationBank, amount: amt, purpose })
+      setPendingTransfer({ method, recipientName, recipientIdentifier: recipientId, destinationBank, amount: amt, purpose, category })
       setModal({ type: 'sendMoney2' })
     }
 
@@ -435,6 +558,10 @@ export default function Dashboard() {
           <select value={purpose} onChange={e => setPurpose(e.target.value)} required>
             <option>Rent</option><option>Salary</option><option>Business</option><option>Personal</option><option>Other</option>
           </select>
+          <label>Description <span style={{ fontWeight: 400, color: '#9aa0ab', textTransform: 'none' }}>(optional)</span></label>
+          <select value={category} onChange={e => setCategory(e.target.value)}>
+            {expenseCategories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
           <button type="submit" className="modal-btn-primary">CONTINUE</button>
         </form>
@@ -457,12 +584,14 @@ export default function Dashboard() {
         if (!vData.success) { setError('Incorrect password. Please try again.'); setLoading(false); return }
         const txRes = await fetch('/api/transaction/create', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-          body: JSON.stringify({ type: 'transfer', amount: pendingTransfer.amount, recipient: pendingTransfer.recipientName, recipient_account: pendingTransfer.recipientIdentifier, transfer_method: pendingTransfer.method, destination_bank: pendingTransfer.destinationBank, purpose: pendingTransfer.purpose })
+          body: JSON.stringify({ type: 'transfer', amount: pendingTransfer.amount, recipient: pendingTransfer.recipientName, recipient_account: pendingTransfer.recipientIdentifier, transfer_method: pendingTransfer.method, destination_bank: pendingTransfer.destinationBank, purpose: pendingTransfer.purpose, category: pendingTransfer.category })
         })
         const txData = await txRes.json()
         if (txData.success) {
           setUserData(u => ({ ...u, balance: txData.new_balance, points: txData.new_points }))
-          loadTransactions(); loadBreakdown()
+          loadTransactions(); loadBreakdown(); loadNotifications()
+          const feeNote = txData.fee_applied ? ` (+ PKR ${txData.fee.toLocaleString('en-PK')} fee)` : ''
+          showToast(`PKR ${pendingTransfer.amount.toLocaleString('en-PK')} sent to ${pendingTransfer.recipientName}${pendingTransfer.category !== 'Transfer' ? ` — ${pendingTransfer.category}` : ''}${feeNote}`)
           setModal({ type: 'sendMoney3', txData })
         } else { setError(txData.message || 'Transaction failed.') }
       } catch { setError('Server error. Please try again.') }
@@ -479,6 +608,9 @@ export default function Dashboard() {
           <div className="summary-row"><span>{pendingTransfer?.method}</span><strong>{pendingTransfer?.recipientIdentifier}</strong></div>
           <div className="summary-row"><span>Amount</span><strong>PKR {pendingTransfer?.amount?.toLocaleString('en-PK')}</strong></div>
           <div className="summary-row"><span>Purpose</span><strong>{pendingTransfer?.purpose}</strong></div>
+          {pendingTransfer?.category && pendingTransfer.category !== 'Transfer' && (
+            <div className="summary-row"><span>Description</span><strong>{pendingTransfer.category}</strong></div>
+          )}
         </div>
         <form onSubmit={handleSubmit}>
           <label>Enter your password to confirm</label>
@@ -500,7 +632,10 @@ export default function Dashboard() {
         <div className="success-icon">✓</div>
         <h3 style={{ color: 'var(--income)', marginBottom: 15 }}>Transfer Successful!</h3>
         <p style={{ fontSize: 16, marginBottom: 5 }}>PKR {pendingTransfer?.amount?.toLocaleString('en-PK')} sent to {pendingTransfer?.recipientName}</p>
-        <p style={{ fontSize: 14, color: '#666', marginBottom: 10 }}>via {pendingTransfer?.method} · {pendingTransfer?.purpose}</p>
+        <p style={{ fontSize: 14, color: '#666', marginBottom: 10 }}>via {pendingTransfer?.method} · {pendingTransfer?.purpose}{pendingTransfer?.category && pendingTransfer.category !== 'Transfer' ? ` · ${pendingTransfer.category}` : ''}</p>
+        {txData?.fee_applied && (
+          <p style={{ fontSize: 13, color: 'var(--warning)', marginBottom: 10 }}>+ PKR {txData.fee?.toLocaleString('en-PK')} transfer fee (external bank transfer) — total deducted: PKR {(pendingTransfer.amount + txData.fee).toLocaleString('en-PK')}</p>
+        )}
         <p style={{ fontSize: 14, color: 'var(--primary-purple)' }}>You earned {txData?.points_earned} reward points!</p>
         <div className="receipt-actions">
           <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => downloadReceipt(txId)}>DOWNLOAD PDF</button>
@@ -522,14 +657,21 @@ export default function Dashboard() {
     const [loadingProviders, setLoadingProviders] = useState(false)
 
     async function handleCategoryChange(cat) {
-      setCategory(cat); setProvider(''); setProviders([]); setSavedRef(null)
+      setCategory(cat); setProvider(''); setProviders([]); setSavedRef(null); setError('')
       if (!cat) return
       setLoadingProviders(true)
       try {
         const res = await fetch(`/api/bills/providers?category=${encodeURIComponent(cat)}`, { credentials: 'include' })
+        if (res.status === 401) { setError('Your session has expired — please log in again.'); setLoadingProviders(false); return }
         const data = await res.json()
-        if (data.success) setProviders(data.providers || [])
-      } catch {}
+        if (data.success && Array.isArray(data.providers) && data.providers.length > 0) {
+          setProviders(data.providers)
+        } else {
+          setError(data.message || 'Could not load providers for this category. Please try again.')
+        }
+      } catch {
+        setError('Could not reach the server to load providers. Check your connection and try again.')
+      }
       setLoadingProviders(false)
     }
 
@@ -538,9 +680,13 @@ export default function Dashboard() {
       if (!p) return
       try {
         const res = await fetch(`/api/bills/saved-ref?provider=${encodeURIComponent(p)}`, { credentials: 'include' })
+        if (!res.ok) return
         const data = await res.json()
         if (data.success && data.has_saved_ref) setSavedRef(data.ref)
-      } catch {}
+      } catch {
+        // Non-critical — the saved-account prompt is a convenience, not a
+        // required step, so a failure here shouldn't block bill entry.
+      }
     }
 
     function handleSubmit(e) {
@@ -608,7 +754,8 @@ export default function Dashboard() {
         const txData = await txRes.json()
         if (txData.success) {
           setUserData(u => ({ ...u, balance: txData.new_balance, points: txData.new_points }))
-          loadTransactions(); loadBreakdown(); loadReminders()
+          loadTransactions(); loadBreakdown(); loadReminders(); loadNotifications()
+          showToast(`PKR ${pendingBill.amount.toLocaleString('en-PK')} paid to ${pendingBill.biller}`)
           setModal({ type: 'payBill3', txData })
         } else { setModal({ type: 'payBill2', inlineError: txData.message || 'Payment failed.' }) }
       } catch { setError('Server error. Please try again.') }
@@ -680,7 +827,8 @@ export default function Dashboard() {
         const data = await res.json()
         if (data.success) {
           setUserData(u => ({ ...u, points: data.remaining_points, balance: data.new_balance }))
-          loadTransactions()
+          loadTransactions(); loadNotifications()
+          showToast(`Redeemed: ${data.description}`)
           setModal({ type: 'redeemPoints', message: `Redeemed! ${data.description}`, messageType: 'success' })
         } else {
           setModal({ type: 'redeemPoints', message: data.message || 'Redemption failed.', messageType: 'error' })
@@ -715,7 +863,8 @@ export default function Dashboard() {
         const data = await res.json()
         if (data.success) {
           setUserData(u => ({ ...u, points: data.remaining_points, balance: data.new_balance }))
-          loadTransactions()
+          loadTransactions(); loadNotifications()
+          showToast(`Redeemed: ${data.description}`)
           setModal({ type: 'redeemPoints', message: `Redeemed! ${data.description}`, messageType: 'success' })
         } else { setModal({ type: 'redeemPoints', message: data.message || 'Redemption failed.', messageType: 'error' }) }
       } catch { setModal({ type: 'redeemPoints', message: 'Server error.', messageType: 'error' }) }
@@ -749,8 +898,9 @@ export default function Dashboard() {
         const data = await res.json()
         if (data.success) {
           setUserData(u => ({ ...u, balance: data.new_balance }))
+          showToast(`PKR ${amt.toLocaleString('en-PK')} added to your balance`)
           setModal({ type: 'alert', title: 'Balance Updated', message: `PKR ${amt.toLocaleString('en-PK')} added. New balance: PKR ${data.new_balance.toLocaleString('en-PK')}`, color: 'var(--income)' })
-          loadTransactions()
+          loadTransactions(); loadNotifications()
         } else { setError(data.message || 'Top-up failed.') }
       } catch { setError('Server error. Please try again.') }
     }
@@ -792,8 +942,9 @@ export default function Dashboard() {
         const data = await res.json()
         if (data.success) {
           setUserData(u => ({ ...u, balance: data.new_balance ?? u.balance }))
-          loadTransactions()
+          loadTransactions(); loadNotifications()
           setAdvisor(a => ({ ...a, loaded: false }))
+          showToast(`PKR ${amt.toLocaleString('en-PK')} income logged — ${source}`)
           setModal({ type: 'alert', title: 'Income Logged', message: `PKR ${amt.toLocaleString('en-PK')} added from ${source}.`, color: 'var(--income)' })
         } else { setError(data.message || 'Could not log income.') }
       } catch { setError('Server error. Please try again.') }
@@ -1212,7 +1363,14 @@ export default function Dashboard() {
     const expenses = advisor.summary?.expenses ?? 0
     const net = advisor.summary?.net ?? (income - expenses)
     const upcomingBillsTotal = reminders.reduce((s, r) => s + (r.amount || 0), 0)
-    const safeToSpend = advisor.summaryAvailable ? net - upcomingBillsTotal : null
+    // Safe to Spend now prefers the backend's own calculation (new dedicated
+    // logic on the backend) when it's present; falls back to the old local
+    // Net-minus-upcoming-bills estimate only until that field ships.
+    const backendSafeToSpend = advisor.summary?.safe_to_spend
+    const usingBackendSafeToSpend = typeof backendSafeToSpend === 'number'
+    const safeToSpend = advisor.summaryAvailable
+      ? (usingBackendSafeToSpend ? backendSafeToSpend : net - upcomingBillsTotal)
+      : null
     const incomeEntries = Object.entries(advisor.incomeBreakdown).sort((a, b) => b[1] - a[1])
     const incomeTotal = incomeEntries.reduce((s, [, v]) => s + v, 0)
     const maxTrend = Math.max(1, ...advisor.monthlyTrend.flatMap(m => [m.income || 0, m.expenses || 0]))
@@ -1278,15 +1436,104 @@ export default function Dashboard() {
                   <strong className={`advisor-stat-value ${net >= 0 ? 'income-text' : 'expense-text'}`}>PKR {net.toLocaleString('en-PK')}</strong>
                 </div>
                 <div className="advisor-stat">
-                  <span className="advisor-stat-label">Safe to Spend <InfoTip text="This is what's left after your income, minus your expenses so far and any bills still due — a rough amount you can spend today without dipping into money you already owe." /></span>
+                  <span className="advisor-stat-label">Safe to Spend <InfoTip text={usingBackendSafeToSpend
+                    ? "What's left after income, minus expenses so far, minus a 20% savings target and a 10% investment amount — so spending today doesn't eat into money you're meant to be setting aside."
+                    : "This is what's left after your income, minus your expenses so far and any bills still due — a rough amount you can spend today without dipping into money you already owe."} /></span>
                   <strong className={`advisor-stat-value ${safeToSpend >= 0 ? 'income-text' : 'expense-text'}`}>PKR {safeToSpend.toLocaleString('en-PK')}</strong>
                 </div>
+                {usingBackendSafeToSpend && (
+                  <>
+                    <div className="advisor-stat">
+                      <span className="advisor-stat-label">Suggested Savings (20%)</span>
+                      <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {(advisor.summary.savings_target || 0).toLocaleString('en-PK')}</strong>
+                    </div>
+                    <div className="advisor-stat">
+                      <span className="advisor-stat-label">Suggested Investment (10%)</span>
+                      <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {(advisor.summary.investment_amount || 0).toLocaleString('en-PK')}</strong>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <p className="advisor-empty">Income vs. expense tracking is coming online soon — this card will populate automatically once it's connected on the backend.</p>
             )}
             {advisor.summaryAvailable && (
-              <p className="advisor-footnote">Safe to Spend = Net − upcoming bills (PKR {upcomingBillsTotal.toLocaleString('en-PK')}) — so a night out doesn't quietly eat into money already owed for bills.</p>
+              <p className="advisor-footnote">
+                {usingBackendSafeToSpend
+                  ? "Safe to Spend follows the 50/30/20 rule: income minus expenses, minus a 20% savings target and a 10% investment amount — so a night out doesn't quietly eat into money you're meant to be setting aside."
+                  : `Safe to Spend = Net − upcoming bills (PKR ${upcomingBillsTotal.toLocaleString('en-PK')}) — so a night out doesn't quietly eat into money already owed for bills.`}
+              </p>
+            )}
+          </div>
+
+          <div className="card advisor-insights-card">
+            <h3 style={{ marginTop: 0 }}>AI Insights <span className="preview-tag">Preview</span></h3>
+            <div className="insight-item">💡 Insights like "your electricity bill is 20% higher than usual" will appear here once this panel is connected to the NLP engine.</div>
+            <div className="insight-item">📈 As you log income and expenses, FinBud AI will start suggesting a monthly savings target based on your habits.</div>
+          </div>
+
+          <div className="card">
+            <div className="card-header-row">
+              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Credit Score</h3>
+              {advisor.creditScoreAvailable && (
+                <button type="button" className="read-aloud-btn" aria-label="Read credit score aloud"
+                  onClick={() => speak(`Your credit score is ${advisor.creditScore.score}, rated ${advisor.creditScore.label}. ${advisor.creditScore.advice || ''}`)}>
+                  🔊 Read Aloud
+                </button>
+              )}
+            </div>
+            {advisor.creditScoreAvailable && advisor.creditScore ? (
+              <>
+                <div className="credit-score-row">
+                  <div className="credit-score-value" style={{ color: advisor.creditScore.color }}>{advisor.creditScore.score}</div>
+                  <div>
+                    <span className="credit-score-pill" style={{ background: advisor.creditScore.color }}>{advisor.creditScore.label}</span>
+                    <p className="advisor-footnote" style={{ margin: '8px 0 0' }}>{advisor.creditScore.advice}</p>
+                  </div>
+                </div>
+                {advisor.creditScore.breakdown && (
+                  <div className="credit-breakdown-grid">
+                    <div className="credit-breakdown-item">
+                      <span className="advisor-stat-label">Late Payments</span>
+                      <strong>{advisor.creditScore.breakdown.late_payments}</strong>
+                    </div>
+                    <div className="credit-breakdown-item">
+                      <span className="advisor-stat-label">Balance</span>
+                      <strong>PKR {(advisor.creditScore.breakdown.balance || 0).toLocaleString('en-PK')}</strong>
+                    </div>
+                    <div className="credit-breakdown-item">
+                      <span className="advisor-stat-label">Transactions (6mo)</span>
+                      <strong>{advisor.creditScore.breakdown.transactions_6m}</strong>
+                    </div>
+                    <div className="credit-breakdown-item">
+                      <span className="advisor-stat-label">Reward Points</span>
+                      <strong>{advisor.creditScore.breakdown.reward_points}</strong>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="advisor-empty">Your credit score builds up as you use FinBud — pay bills on time and keep a healthy balance to see it here.</p>
+            )}
+          </div>
+
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Anomaly Alerts</h3>
+            {advisor.anomaliesAvailable && advisor.anomalies.length > 0 ? (
+              advisor.anomalies.map((a, i) => {
+                const cfg = ANOMALY_CONFIG[a.type] || { icon: '⚠️', severity: 'warning', label: a.type }
+                return (
+                  <div key={i} className={`anomaly-item anomaly-${cfg.severity}`}>
+                    <span className="anomaly-icon">{cfg.icon}</span>
+                    <div>
+                      <strong>{cfg.label}</strong>
+                      <p style={{ margin: '3px 0 0', fontSize: 13 }}>{a.message}</p>
+                    </div>
+                  </div>
+                )
+              })
+            ) : (
+              <p className="advisor-empty">No unusual activity detected. We keep an eye on new billers, spending spikes, large transfers, and odd-hours activity automatically.</p>
             )}
           </div>
 
@@ -1435,14 +1682,6 @@ export default function Dashboard() {
             )}
           </div>
           </>
-          )}
-
-          {(!simpleMode || showMore) && (
-            <div className="card advisor-insights-card">
-              <h3 style={{ marginTop: 0 }}>AI Insights <span className="preview-tag">Preview</span></h3>
-              <div className="insight-item">💡 Insights like "your electricity bill is 20% higher than usual" will appear here once this panel is connected to the NLP engine.</div>
-              <div className="insight-item">📈 As you log income and expenses, FinBud AI will start suggesting a monthly savings target based on your habits.</div>
-            </div>
           )}
         </div>
       </div>
@@ -1604,6 +1843,26 @@ export default function Dashboard() {
         .topbar-right { display:flex; align-items:center; gap:20px; }
         .bell-container { position:relative; cursor:pointer; padding:8px; }
         .bell-container i { font-size:22px; color:var(--primary-purple); }
+        .activity-badge { background:var(--income); }
+        .activity-dropdown { right:100px; }
+        .activity-item { border-left-color:var(--primary-purple); background:rgba(92,45,145,0.06); }
+        .activity-item.activity-unread { border-left-color:var(--income); background:rgba(16,185,129,0.08); font-weight:600; }
+
+        /* Toast notification (transaction confirmations) */
+        .toast-notification {
+          position:fixed; top:80px; right:40px; z-index:400;
+          display:flex; align-items:center; gap:10px;
+          background:#1a1a1a; color:#fff; padding:14px 18px; border-radius:10px;
+          font-size:13.5px; font-weight:600; box-shadow:0 8px 24px rgba(0,0,0,0.25);
+          max-width:360px; animation:toastIn 0.25s ease;
+        }
+        .toast-notification.toast-success i { color:var(--income); }
+        .toast-notification button { background:none; border:none; color:#aaa; font-size:18px; cursor:pointer; margin-left:auto; padding:0 0 0 6px; line-height:1; }
+        @keyframes toastIn { from { transform:translateY(-10px); opacity:0; } to { transform:translateY(0); opacity:1; } }
+        @media(max-width:900px) {
+          .toast-notification { right:16px; left:16px; max-width:none; top:70px; }
+          .activity-dropdown { right:16px; }
+        }
         .reminder-badge { position:absolute; top:5px; right:5px; background:var(--danger); color:#fff; border-radius:50%; width:18px; height:18px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
         .reminders-dropdown { position:absolute; top:60px; right:40px; width:350px; max-height:400px; overflow-y:auto; background:var(--card); border-radius:12px; box-shadow:0 8px 20px rgba(0,0,0,0.15); z-index:1000; padding:20px; }
         .reminders-dropdown h3 { color:var(--primary-purple); font-weight:700; margin:0 0 15px; font-size:18px; }
@@ -1681,6 +1940,23 @@ export default function Dashboard() {
         .trend-label { font-size:11px; color:#6b7280; font-weight:600; }
         .bank-detect-note { font-size:12px; color:var(--primary-purple); background:var(--secondary-purple); padding:8px 12px; border-radius:6px; margin-top:6px; }
         .advisor-footnote { font-size:12px; color:#6b7280; margin:12px 0 0; line-height:1.5; }
+
+        /* Credit Score card */
+        .credit-score-row { display:flex; align-items:center; gap:20px; flex-wrap:wrap; margin-bottom:16px; }
+        .credit-score-value { font-size:48px; font-weight:800; line-height:1; }
+        .credit-score-pill { display:inline-block; padding:4px 14px; border-radius:20px; color:#fff; font-size:12px; font-weight:700; text-transform:uppercase; }
+        .credit-breakdown-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; padding-top:14px; border-top:1px solid var(--secondary-purple); }
+        .credit-breakdown-item { display:flex; flex-direction:column; gap:4px; }
+        .credit-breakdown-item strong { font-size:15px; color:var(--primary-purple); }
+
+        /* Anomaly Alerts card */
+        .anomaly-item { display:flex; gap:12px; align-items:flex-start; padding:12px; margin-bottom:10px; border-radius:8px; border-left:4px solid var(--secondary-purple); background:var(--secondary-purple); }
+        .anomaly-item:last-child { margin-bottom:0; }
+        .anomaly-icon { font-size:18px; flex-shrink:0; }
+        .anomaly-item.anomaly-info { border-left-color:var(--primary-purple); background:rgba(92,45,145,0.06); }
+        .anomaly-item.anomaly-warning { border-left-color:var(--warning); background:rgba(245,158,11,0.1); }
+        .anomaly-item.anomaly-danger { border-left-color:var(--danger); background:rgba(185,28,28,0.08); }
+
         .wallet-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
         .wallet-row { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid var(--secondary-purple); }
         .wallet-row:last-child { border-bottom:none; }
@@ -1844,13 +2120,13 @@ export default function Dashboard() {
             <span className="left-nav-brand-text">FinBud</span>
           </div>
           <ul className="left-nav-list">
-            <li className={activeView === 'home' ? 'active' : ''} onClick={() => { setActiveView('home'); setRemindersOpen(false) }}>
+            <li className={activeView === 'home' ? 'active' : ''} onClick={() => { setActiveView('home'); setRemindersOpen(false); setTxNotifOpen(false) }}>
               <i className="fas fa-home" /> <span>Home</span>
             </li>
-            <li className={activeView === 'advisor' ? 'active' : ''} onClick={() => { setActiveView('advisor'); setRemindersOpen(false) }}>
+            <li className={activeView === 'advisor' ? 'active' : ''} onClick={() => { setActiveView('advisor'); setRemindersOpen(false); setTxNotifOpen(false) }}>
               <i className="fas fa-chart-pie" /> <span>Financial Advisor</span>
             </li>
-            <li className={activeView === 'wallet' ? 'active' : ''} onClick={() => { setActiveView('wallet'); setRemindersOpen(false) }}>
+            <li className={activeView === 'wallet' ? 'active' : ''} onClick={() => { setActiveView('wallet'); setRemindersOpen(false); setTxNotifOpen(false) }}>
               <i className="fas fa-wallet" /> <span>Wallet</span>
             </li>
           </ul>
@@ -1873,6 +2149,10 @@ export default function Dashboard() {
             <header className="topbar">
               <h1 className="topbar-title">{activeView === 'home' ? 'Dashboard' : activeView === 'advisor' ? 'Financial Advisor' : 'Wallet'}</h1>
               <div className="topbar-right">
+                <div className="bell-container" role="button" tabIndex={0} aria-label={`${notifUnreadCount} unread notifications`} onClick={openNotifications}>
+                  <i className="fas fa-receipt" />
+                  {notifUnreadCount > 0 && <span className="reminder-badge activity-badge">{notifUnreadCount}</span>}
+                </div>
                 <div className="bell-container" role="button" tabIndex={0} aria-label={`Bill reminders, ${reminders.length} pending`} onClick={() => setRemindersOpen(o => !o)}>
                   <i className="fas fa-bell" />
                   {reminders.length > 0 && <span className="reminder-badge">{reminders.length}</span>}
@@ -1883,6 +2163,20 @@ export default function Dashboard() {
                 </div>
               </div>
             </header>
+
+            {txNotifOpen && (
+              <div className="reminders-dropdown activity-dropdown" onClick={e => e.stopPropagation()}>
+                <h3><i className="fas fa-receipt" /> Transaction Activity</h3>
+                {notifications.length === 0
+                  ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>No activity yet</p>
+                  : notifications.map(n => (
+                    <div key={n.id} className={`reminder-item activity-item ${n.is_read ? '' : 'activity-unread'}`}>
+                      <div style={{ fontSize: 13.5 }}>{n.message}</div>
+                      <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>{new Date(n.created_at).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+                    </div>
+                  ))}
+              </div>
+            )}
 
             {remindersOpen && (
               <div className="reminders-dropdown" onClick={e => e.stopPropagation()}>
@@ -1900,8 +2194,16 @@ export default function Dashboard() {
               </div>
             )}
 
+            {toast && (
+              <div className={`toast-notification toast-${toast.type}`} role="status">
+                <i className="fas fa-check-circle" />
+                <span>{toast.message}</span>
+                <button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}>×</button>
+              </div>
+            )}
+
             {activeView === 'home' ? (
-              <main className="dashboard-grid" onClick={() => { setRemindersOpen(false); setOpenMenuId(null) }}>
+              <main className="dashboard-grid" onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
                 <section className="column-left">
                   <div className="main-balance-card">
                     <h2>Hello, {userData.name}!</h2>
@@ -1948,7 +2250,7 @@ export default function Dashboard() {
                             return (
                               <tr key={menuId}>
                                 <td>{tx.date}</td>
-                                <td className="tx-desc-cell" title={tx.description}>{tx.description}</td>
+                                <td className="tx-desc-cell" title={getTransactionDisplayLabel(tx)}>{getTransactionDisplayLabel(tx)}</td>
                                 <td className={tx.amount < 0 ? 'expense-text' : 'income-text'}>PKR {Math.abs(tx.amount).toLocaleString('en-PK')}</td>
                                 <td>
                                   <div className="tx-menu-wrap">
@@ -1967,11 +2269,11 @@ export default function Dashboard() {
                 </section>
               </main>
             ) : activeView === 'advisor' ? (
-              <main onClick={() => { setRemindersOpen(false); setOpenMenuId(null) }}>
+              <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
                 <FinancialAdvisorView />
               </main>
             ) : (
-              <main onClick={() => { setRemindersOpen(false); setOpenMenuId(null) }}>
+              <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
                 <WalletView />
               </main>
             )}
