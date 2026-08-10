@@ -1,0 +1,66 @@
+/*
+  FinBud AI — Admin Console design tokens.
+  Same variable NAMES used in the page-build prompts (so FraudAlertList.jsx,
+  UserManagement.jsx, etc. theme correctly without edits) but VALUES swapped
+  to FinBud's actual purple brand instead of the generic blue, so the admin
+  console matches Login.jsx / Dashboard.jsx / Chat.jsx.
+
+  Import this once, globally, in main.jsx:
+    import './styles/admin-variables.css'
+*/
+
+:root {
+  --sidebar-width: 220px;
+  --header-height: 64px;
+
+  /* Sidebar — light, matching the customer app's white left-nav
+     (Dashboard.jsx .left-nav) instead of a separate dark console theme */
+  --color-sidebar-bg: #ffffff;
+  --color-sidebar-bg-hover: #f2f2f2;
+  --color-sidebar-text: #211a35;
+  --color-sidebar-text-muted: #9992ac;
+  --color-sidebar-active: #5c2d91;
+
+  /* Surfaces — aligned to Dashboard.jsx's --bg/--card values */
+  --color-header-bg: #ffffff;
+  --color-content-bg: #f2f2f2;
+  --color-card-bg: #ffffff;
+  --color-border: #e5e1ee;
+
+  /* Brand */
+  --color-primary: #5c2d91;
+  --color-primary-light: #ece5f7;
+  --color-primary-dark: #451f6e;
+
+  /* Status */
+  --color-danger: #ef4444;
+  --color-danger-light: #fee2e2;
+  --color-warning: #f59e0b;
+  --color-warning-light: #fef3c7;
+  --color-success: #22c55e;
+  --color-success-light: #dcfce7;
+  --color-info: #3b82f6;
+  --color-info-light: #dbeafe;
+
+  /* Text */
+  --color-text-primary: #211a35;
+  --color-text-secondary: #6b6280;
+  --color-text-muted: #9992ac;
+
+  /* Anomaly-type badge colors, referenced directly by FraudAlertList.jsx */
+  --color-anomaly-emergency: #ef4444;
+  --color-anomaly-new-biller: #f97316;
+  --color-anomaly-amount-spike: #f59e0b;
+  --color-anomaly-duplicate-bill: #eab308;
+  --color-anomaly-large-transfer: #5c2d91;
+  --color-anomaly-rapid-fire: #a855f7;
+  --color-anomaly-odd-hours: #64748b;
+
+  /* Shape / motion, shared by Modal, DataTable, StatCard */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shadow-card: 0 4px 10px rgba(0, 0, 0, 0.05);
+  --shadow-modal: 0 20px 50px rgba(0, 0, 0, 0.25);
+  --transition-fast: 0.15s ease;
+}
