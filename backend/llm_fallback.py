@@ -141,10 +141,10 @@ class LLMFallback:
     and then called via .classify() for every regex miss.
     """
 
-    def __init__(self, api_key: str = None, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: str = None, model: str = "openai/gpt-oss-120b"):
         """
         api_key : your Groq API key (falls back to GROQ_API_KEY env var)
-        model   : Groq model ID — llama-3.3-70b-versatile is the best
+        model   : Groq model ID — openai/gpt-oss-120b is the best
                   balance of quality + speed for this task.
                   Cheaper alternative: "llama-3.1-8b-instant"
         """
