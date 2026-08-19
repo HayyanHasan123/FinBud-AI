@@ -2165,8 +2165,8 @@ class BankAIConversation:
 # ── Hybrid LLM fallback ───────────────────────────────────────────────
         try:
             self._llm = LLMFallback(
-                model="llama-3.3-70b-versatile"
-                # Cheaper option: model="llama-3.1-8b-instant"
+                model="openai/gpt-oss-120b"
+                # Cheaper option: model="openai/gpt-oss-120b"
             )
             self._llm_enabled = True
         except Exception as _llm_exc:
