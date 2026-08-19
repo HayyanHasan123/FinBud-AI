@@ -27,7 +27,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 SYSTEM_PROMPT = """You are FinBud AI's financial advisor assistant, speaking inside the \
 "Grow My Money" section of the FinBud banking app.
@@ -39,12 +39,10 @@ features (transfers, cards, bill payments) — politely redirect the user to the
 chat for those.
 - Never recommend a specific stock, fund, or product. You may describe general \
 categories (e.g. "safe, slow-growth" vs "some risk, faster growth").
-- Keep answers short (2-4 sentences), plain-language, and free of jargon.
+- Keep answers short (1-3 sentences), plain-language, and free of jargon.
 - Match tone to the user's experience_level if provided: "never" -> extra simple, \
 with a real-world analogy; "a_little" -> simple but a bit more direct; \
 "comfortable" -> can be more direct/technical.
-- This is educational information, not formal financial advice — make that clear if \
-the user asks for a specific recommendation.
 """
 
 _client = None
