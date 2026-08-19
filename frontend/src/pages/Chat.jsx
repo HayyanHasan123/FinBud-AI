@@ -1,18 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { FinBudVoiceManager, VOICE_STATES, isVoiceSupported } from '../utils/voiceManager'
 
 export default function Chat() {
   const navigate = useNavigate()
   const messagesEndRef = useRef(null)
   const printRef = useRef(null)
-  const mediaRecorderRef = useRef(null)
-  const audioChunksRef = useRef([])
-  const audioStreamRef = useRef(null)
+  const voiceManagerRef = useRef(null)
 
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [isRecording, setIsRecording] = useState(false)
+  // Hands-free voice mode: 'idle' | 'listening' | 'processing' | 'speaking'
+  const [voiceState, setVoiceState] = useState(VOICE_STATES.IDLE)
+  const [isVoiceModeActive, setIsVoiceModeActive] = useState(false)
   const [hasCard, setHasCard] = useState(true)
   const [modal, setModal] = useState(null)
   const [pendingInfo, setPendingInfo] = useState(null)
@@ -33,6 +34,43 @@ export default function Chat() {
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'en-US'
     window.speechSynthesis.speak(utterance)
+  }
+
+  // ── Hands-free voice mode ─────────────────────────────────
+  // One FinBudVoiceManager instance lives for the life of the page. It owns
+  // the browser SpeechRecognition/speechSynthesis lifecycle; this component
+  // just feeds it transcripts in and AI replies out.
+  useEffect(() => {
+    voiceManagerRef.current = new FinBudVoiceManager({
+      onTranscript: (transcript) => { sendMessage(transcript) },
+      onStateChange: (state) => setVoiceState(state),
+      onError: (err) => {
+        if (err === 'unsupported') {
+          appendMessage("Voice chat isn't supported in this browser. Try Chrome or Edge.", 'ai')
+        } else if (err === 'not-allowed' || err === 'service-not-allowed') {
+          appendMessage('Voice chat needs microphone access. Please allow it and try again.', 'ai')
+        }
+        setIsVoiceModeActive(false)
+      },
+    })
+    return () => { voiceManagerRef.current?.stop() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function toggleVoiceMode() {
+    const vm = voiceManagerRef.current
+    if (!vm) return
+    if (isVoiceModeActive) {
+      vm.stop()
+      setIsVoiceModeActive(false)
+    } else {
+      if (!isVoiceSupported()) {
+        appendMessage("Voice chat isn't supported in this browser. Try Chrome or Edge.", 'ai')
+        return
+      }
+      setIsVoiceModeActive(true)
+      vm.start()
+    }
   }
 
   useEffect(() => {
@@ -87,6 +125,14 @@ export default function Chat() {
 
     const needsPw  = data.awaiting_password
     const needsEPw = data.awaiting_emergency_password
+    const opensPasswordModal = (needsPw || needsEPw || emergencyFlow) && !((needsEPw || emergencyFlow) && !hasCard)
+
+    // Speak the reply aloud when hands-free mode is on. If a password
+    // modal is about to open, don't re-arm the mic afterwards — password
+    // entry should stay typed, not spoken.
+    if (isVoiceModeActive) {
+      voiceManagerRef.current?.speak(data.ai_response, { reArm: !opensPasswordModal })
+    }
 
     if (!needsPw && !needsEPw && !emergencyFlow) return
     if ((needsEPw || emergencyFlow) && !hasCard) return
@@ -208,47 +254,6 @@ export default function Chat() {
 
     setIsLoading(false)
     await maybePrefill(data)
-    await handleResponse(data)
-  }
-
-  async function toggleRecording() {
-    if (isRecording) {
-      mediaRecorderRef.current?.stop()
-      audioStreamRef.current?.getTracks().forEach(t => t.stop())
-      setIsRecording(false)
-      return
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      audioStreamRef.current = stream
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-      audioChunksRef.current = []
-      recorder.ondataavailable = e => audioChunksRef.current.push(e.data)
-      recorder.onstart = () => setIsRecording(true)
-      recorder.onstop = () => {
-        setIsRecording(false)
-        processVoiceMessage()
-      }
-      recorder.start()
-      mediaRecorderRef.current = recorder
-    } catch {
-      appendMessage('Error: Could not access microphone. Please ensure permissions are granted.', 'ai')
-    }
-  }
-
-  async function processVoiceMessage() {
-    const hardcoded = 'mera balance kitna hai'
-    setMessages(prev => prev.filter(m => m.type !== 'welcome'))
-    appendMessage(hardcoded, 'user')
-    setIsLoading(true)
-    let data
-    try { data = await postChat(hardcoded) }
-    catch {
-      setIsLoading(false)
-      appendMessage('Sorry, I could not connect to the server.', 'ai')
-      return
-    }
-    setIsLoading(false)
     await handleResponse(data)
   }
 
@@ -471,9 +476,14 @@ export default function Chat() {
         .input-area button { background:var(--primary-purple); color:#fff; border:none; border-radius:8px; padding:12px; font-weight:600; cursor:pointer; transition:opacity 0.2s; }
         .input-area button:hover { opacity:0.9; }
         .mic-btn { background:var(--secondary-purple) !important; color:var(--primary-purple) !important; width:50px; padding:12px 0 !important; border:1px solid rgba(92,45,145,0.3) !important; font-size:18px; }
-        .mic-btn.recording { background:var(--danger) !important; color:#fff !important; border-color:var(--danger) !important; animation:pulse 1.5s infinite; }
+        /* Hands-free voice states: idle (mic on, not yet active) / listening (pulsing red) / processing (spinner) / speaking (waveform) */
+        .mic-btn.idle { background:var(--primary-purple) !important; color:#fff !important; border-color:var(--primary-purple) !important; }
+        .mic-btn.listening { background:var(--danger) !important; color:#fff !important; border-color:var(--danger) !important; animation:pulse 1.5s infinite; }
+        .mic-btn.processing { background:var(--primary-purple) !important; color:#fff !important; border-color:var(--primary-purple) !important; }
+        .mic-btn.speaking { background:#15803d !important; color:#fff !important; border-color:#15803d !important; animation:speakGlow 1.2s infinite; }
         .send-btn { padding:12px 20px !important; }
         @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(185,28,28,0.6)} 70%{box-shadow:0 0 0 10px rgba(185,28,28,0)} 100%{box-shadow:0 0 0 0 rgba(185,28,28,0)} }
+        @keyframes speakGlow { 0%{box-shadow:0 0 0 0 rgba(21,128,61,0.5)} 70%{box-shadow:0 0 0 8px rgba(21,128,61,0)} 100%{box-shadow:0 0 0 0 rgba(21,128,61,0)} }
         .modal-overlay { display:flex; position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(5px); z-index:200; justify-content:center; align-items:center; }
         .pw-modal { background:var(--card); border-radius:12px; padding:30px; width:min(90vw,450px); position:relative; box-shadow:0 10px 30px rgba(0,0,0,0.2); max-height:90vh; overflow-y:auto; animation:pwIn .25s ease; }
         @keyframes pwIn { from{transform:scale(.94);opacity:0} to{transform:scale(1);opacity:1} }
@@ -580,9 +590,17 @@ export default function Chat() {
               disabled={isLoading}
               aria-label="Type your message to FinBud AI"
             />
-            <button className={`mic-btn ${isRecording ? 'recording' : ''}`} onClick={toggleRecording}
-              title="Voice Input" aria-label={isRecording ? 'Stop recording' : 'Start voice input'}>
-              <i className={`fas fa-${isRecording ? 'stop' : 'microphone'}`} />
+            <button
+              className={`mic-btn ${isVoiceModeActive ? voiceState : ''}`}
+              onClick={toggleVoiceMode}
+              title={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
+              aria-label={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
+            >
+              {voiceState === 'processing' && <i className="fas fa-spinner fa-spin" />}
+              {voiceState === 'speaking' && <i className="fas fa-volume-high" />}
+              {(voiceState === 'idle' || voiceState === 'listening') && (
+                <i className={`fas fa-microphone${isVoiceModeActive ? '' : ''}`} />
+              )}
             </button>
             <button className="send-btn" onClick={() => sendMessage()} disabled={isLoading} aria-label="Send message">Send</button>
           </div>
