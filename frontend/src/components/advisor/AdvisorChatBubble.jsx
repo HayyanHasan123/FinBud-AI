@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { FinBudVoiceManager, VOICE_STATES, isVoiceSupported } from '../../utils/voiceManager'
 
 // A small cartoonish "speech bubble with a face" icon — Fin's symbol.
 // Purely an SVG symbol (currentColor-based), no emoji characters, so it
@@ -39,21 +40,53 @@ export default function AdvisorChatBubble() {
   ])
   const [inputText, setInputText] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // Hands-free voice mode: 'idle' | 'listening' | 'processing' | 'speaking'
+  const [voiceState, setVoiceState] = useState(VOICE_STATES.IDLE)
+  const [isVoiceModeActive, setIsVoiceModeActive] = useState(false)
   const scrollRef = useRef(null)
+  const voiceManagerRef = useRef(null)
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, open])
 
-  async function sendMessage(e) {
-    e.preventDefault()
-    const text = inputText.trim()
+  // One voice manager per mounted bubble, torn down on unmount.
+  useEffect(() => {
+    voiceManagerRef.current = new FinBudVoiceManager({
+      onTranscript: (transcript) => { sendMessage(transcript) },
+      onStateChange: (state) => setVoiceState(state),
+      onError: (err) => {
+        if (err === 'unsupported') {
+          setMessages(m => [...m, { type: 'ai', text: "Voice chat isn't supported in this browser. Try Chrome or Edge." }])
+        } else if (err === 'not-allowed' || err === 'service-not-allowed') {
+          setMessages(m => [...m, { type: 'ai', text: 'Voice chat needs microphone access. Please allow it and try again.' }])
+        }
+        setIsVoiceModeActive(false)
+      },
+    })
+    return () => { voiceManagerRef.current?.stop() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Turning the panel closed pauses hands-free mode so Fin doesn't keep
+  // listening/talking in the background once the user navigates away.
+  useEffect(() => {
+    if (!open && isVoiceModeActive) {
+      voiceManagerRef.current?.stop()
+      setIsVoiceModeActive(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  async function sendMessage(textOverride) {
+    const text = (typeof textOverride === 'string' ? textOverride : inputText).trim()
     if (!text || isLoading) return
 
     setMessages(m => [...m, { type: 'user', text }])
     setInputText('')
     setIsLoading(true)
 
+    let aiText
     try {
       const res = await fetch('/api/chat/message', {
         method: 'POST',
@@ -62,15 +95,35 @@ export default function AdvisorChatBubble() {
         body: JSON.stringify({ message: text, context: 'financial_advisor' })
       })
       const data = await res.json()
-      if (data.success) {
-        setMessages(m => [...m, { type: 'ai', text: data.ai_response }])
-      } else {
-        setMessages(m => [...m, { type: 'ai', text: "Sorry, I couldn't get an answer just now. Please try again." }])
-      }
+      aiText = data.success ? data.ai_response : "Sorry, I couldn't get an answer just now. Please try again."
     } catch {
-      setMessages(m => [...m, { type: 'ai', text: "I couldn't reach the server. Please try again." }])
+      aiText = "I couldn't reach the server. Please try again."
     } finally {
       setIsLoading(false)
+    }
+
+    setMessages(m => [...m, { type: 'ai', text: aiText }])
+    if (isVoiceModeActive) voiceManagerRef.current?.speakAndListen(aiText)
+  }
+
+  function handleFormSubmit(e) {
+    e.preventDefault()
+    sendMessage()
+  }
+
+  function toggleVoiceMode() {
+    const vm = voiceManagerRef.current
+    if (!vm) return
+    if (isVoiceModeActive) {
+      vm.stop()
+      setIsVoiceModeActive(false)
+    } else {
+      if (!isVoiceSupported()) {
+        setMessages(m => [...m, { type: 'ai', text: "Voice chat isn't supported in this browser. Try Chrome or Edge." }])
+        return
+      }
+      setIsVoiceModeActive(true)
+      vm.start()
     }
   }
 
@@ -134,7 +187,7 @@ export default function AdvisorChatBubble() {
             {isLoading && <div className="advisor-chat-bubble-msg ai">…</div>}
           </div>
 
-          <form className="advisor-chat-popup-input-row" onSubmit={sendMessage}>
+          <form className="advisor-chat-popup-input-row" onSubmit={handleFormSubmit}>
             <input
               type="text"
               value={inputText}
@@ -142,6 +195,17 @@ export default function AdvisorChatBubble() {
               onChange={e => setInputText(e.target.value)}
               disabled={isLoading}
             />
+            <button
+              type="button"
+              className={`advisor-mic-btn ${isVoiceModeActive ? voiceState : ''}`}
+              onClick={toggleVoiceMode}
+              title={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
+              aria-label={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
+            >
+              {voiceState === 'processing' && <i className="fas fa-spinner fa-spin" />}
+              {voiceState === 'speaking' && <i className="fas fa-volume-high" />}
+              {(voiceState === 'idle' || voiceState === 'listening') && <i className="fas fa-microphone" />}
+            </button>
             <button type="submit" disabled={isLoading || !inputText.trim()} aria-label="Send">
               <i className="fas fa-paper-plane" />
             </button>
