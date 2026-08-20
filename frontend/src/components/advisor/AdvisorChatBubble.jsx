@@ -50,6 +50,21 @@ export default function AdvisorChatBubble() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, open])
 
+  // Auto-open when redirected here from the main Chat page's "Talk to
+  // Fin" CTA (see Chat.jsx's openAdvisor()) - it can't reach into this
+  // component directly since it's mounted on a different route, so it
+  // leaves a one-shot flag for us to pick up instead.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('finbud_open_advisor') === '1') {
+        sessionStorage.removeItem('finbud_open_advisor')
+        setOpen(true)
+        setGreetingDismissed(true)
+      }
+    } catch { /* noop */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // One voice manager per mounted bubble, torn down on unmount.
   useEffect(() => {
     voiceManagerRef.current = new FinBudVoiceManager({
