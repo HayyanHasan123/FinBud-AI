@@ -87,14 +87,26 @@ logger = logging.getLogger(__name__)
 REACT_BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'dist')
 
 app = Flask(__name__, static_folder=REACT_BUILD_DIR, static_url_path='/')
-app.secret_key = secrets.token_hex(32)
+# Fixed key from env so sessions survive restarts/redeploys and stay valid
+# across multiple Gunicorn workers. Falls back to a per-process random key
+# (with a warning) only if SECRET_KEY isn't set, so dev still works out of
+# the box — but production should always set SECRET_KEY.
+app.secret_key = os.environ.get('SECRET_KEY')
+if not app.secret_key:
+    print("WARNING: SECRET_KEY not set in environment — using a random "
+          "per-process key. Sessions will NOT survive restarts or work "
+          "across multiple workers. Set SECRET_KEY for production.")
+    app.secret_key = secrets.token_hex(32)
 
 # CORS: allow the Vite dev-server (port 5173) to call the Flask API (port 5000)
 # without browser CORS errors.  In production both run on the same origin so
 # CORS is a no-op.
 CORS(app,
      supports_credentials=True,
-     origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+     origins=[
+         "http://localhost:5173", "http://127.0.0.1:5173",
+         "http://localhost:5174", "http://127.0.0.1:5174",   # admin console
+     ])
 
 # ── NLP engine ────────────────────────────────────────────────────────────────
 chatbot = BankAIConversation()
@@ -102,6 +114,17 @@ app.register_blueprint(advisor_profile_bp)   # ← added
 
 # ── Savings Goals feature (self-contained blueprint) ───────────────────────
 app.register_blueprint(goals_bp)
+
+# ── Grow My Money: investing guides (isolated blueprint, see investing_guide_routes.py) ──
+from investing_guide_routes import investing_guide_bp
+app.register_blueprint(investing_guide_bp)
+
+# ── Admin/Ops Console blueprints (auth, overview, chat-monitor, tickets, ─────
+#    transactions, users, fees, settings, fraud, activity, rewards, kyc —
+#    see admin_routes/__init__.py for the full ADMIN_BLUEPRINTS list. ────────
+from admin_routes import ADMIN_BLUEPRINTS
+for bp in ADMIN_BLUEPRINTS:
+    app.register_blueprint(bp)
 
 # ── PostgreSQL connection pool ─────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -243,6 +266,11 @@ def init_user_tables():
 # Initialize tables from both modules
 init_user_tables()
 init_db()
+
+from admin_tables import init_admin_tables
+init_admin_tables()
+from admin_routes.activity import init_activity_tables
+init_activity_tables()  # creates customer_login_log — without this, UserActivityLog.jsx's Login Activity tab 500s
 # ── Savings Goals feature — schema init ─────────────────────────────────────
 # init_goals_tables(conn) commits internally; we open/release the connection
 # here ourselves (same get_pg_conn()/release_pg_conn() pattern init_db() uses)
@@ -393,21 +421,40 @@ def chat_message():
 
         account_number = session['account_number']
 
-        account_number = session['account_number']
-
-# ── Financial Advisor chat bubble ──────────────────────────────────────
+        # ── Financial Advisor chat bubble ──────────────────────────────────────
+        # Sent as {message, context: 'financial_advisor'} from the Grow My Money
+        # chat bubble. Handled here, separately from the BankAIConversation state
+        # machine below, since it's a one-shot Q&A over the user's real numbers
+        # rather than a multi-step banking flow. See advisor_chat.py.
         if data.get('context') == 'financial_advisor':
             from advisor_chat import handle_advisor_chat
             try:
                 financial_summary = get_income_vs_expense(account_number)
             except Exception:
                 financial_summary = {}
+
+            experience_level = None
+            risk_preference = None
+            try:
+                _prof_conn = get_pg_conn(); _prof_c = _prof_conn.cursor()
+                _prof_c.execute(
+                    "SELECT experience_level, risk_preference FROM advisor_profiles WHERE account_number=%s",
+                    (account_number,)
+                )
+                _prof_row = _prof_c.fetchone()
+                release_pg_conn(_prof_conn)
+                if _prof_row:
+                    experience_level = _prof_row['experience_level']
+                    risk_preference = _prof_row['risk_preference']
+            except Exception:
+                pass  # profile lookup is best-effort — chat still works without it
+
             user_context = {
                 'income': financial_summary.get('income'),
                 'expenses': financial_summary.get('expenses'),
                 'net': financial_summary.get('net'),
-                'experience_level': session.get('advisor_experience_level'),
-                'risk_preference': session.get('advisor_risk_preference'),
+                'experience_level': experience_level,
+                'risk_preference': risk_preference,
             }
             ai_response = handle_advisor_chat(user_message, user_context)
             return jsonify({
@@ -436,7 +483,63 @@ def chat_message():
         user['balance'] = float(user['balance'])
         user['points']  = int(user['points'])
 
+        # ── Human-mode bypass ───────────────────────────────────────────────
+        # If a banker has taken this conversation over (via Live Chat Monitor
+        # or by claiming the ticket), the bot needs to stay quiet instead of
+        # auto-replying on top of the banker. Just log the message and let
+        # the banker see it — no NLP, no ai_response.
+        c.execute("SELECT mode FROM conversation_state WHERE account_number = %s", (account_number,))
+        conv_state_row = c.fetchone()
+        if conv_state_row and conv_state_row['mode'] == 'human':
+            c.execute("""
+                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at, sender)
+                VALUES (%s, %s, NULL, 'human_mode_message', %s, 'user')
+            """, (account_number, user_message, datetime.utcnow().isoformat()))
+            conn.commit()
+            release_db(conn)
+            return jsonify({
+                'success':     True,
+                'ai_response': None,
+                'intent':      'human_mode_message',
+                'language':    'en',
+                'llm_used':    False,
+                'human_mode':  True
+            })
+
         conversation_context = session.get('conversation_context', {})
+
+        # ── Explicit cancel mid-flow ─────────────────────────────────────────
+        # There's no dedicated "cancel" intent in the NLP layer, so this is
+        # handled here directly: if the customer is partway through a
+        # multi-step flow (awaiting a password, or mid-way through providing
+        # transfer/bill/redeem details) and says "cancel" (or an equivalent),
+        # stop the flow right here instead of handing it to the NLP layer.
+        CANCEL_PHRASES = {'cancel', 'cancel it', 'cancel that', 'cancel transaction',
+                           'cancel this', 'nevermind', 'never mind', 'stop', 'abort'}
+        is_mid_flow = bool(
+            conversation_context.get('awaiting_password')
+            or conversation_context.get('awaiting_emergency_password')
+            or conversation_context.get('current_flow')
+        )
+        if is_mid_flow and user_message.strip().lower() in CANCEL_PHRASES:
+            session['conversation_context'] = {}
+            ai_response = "No problem, I've cancelled that. Is there anything else I can help with?"
+
+            c.execute("""
+                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (account_number, user_message, ai_response, 'cancelled', datetime.utcnow().isoformat()))
+            conn.commit()
+            release_db(conn)
+
+            return jsonify({
+                'success':       True,
+                'ai_response':   ai_response,
+                'intent':        'cancelled',
+                'language':      'en',
+                'llm_used':      False,
+                'session_reset': True
+            })
         nlp_result = chatbot.process_message(user_message, conversation_context)
 
         intent    = nlp_result['intent']
@@ -468,6 +571,7 @@ def chat_message():
                 conn.commit()
                 ai_response = chatbot.responses['emergency_confirm'][language]
                 session['conversation_context'] = {}
+                session_reset = True
             else:
                 attempts -= 1
                 if attempts > 0:
@@ -476,9 +580,11 @@ def chat_message():
                         'awaiting_emergency_password': True,
                         'emergency_attempts': attempts
                     }
+                    session_reset = False
                 else:
                     ai_response = chatbot.responses['emergency_failed'][language]
                     session['conversation_context'] = {}
+                    session_reset = True
 
             c.execute("""
                 INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
@@ -489,11 +595,12 @@ def chat_message():
             release_db(conn)
 
             return jsonify({
-                'success':    True,
-                'ai_response': ai_response,
-                'intent':     'emergency',
-                'language':   language,
-                'llm_used':   llm_used
+                'success':      True,
+                'ai_response':  ai_response,
+                'intent':       'emergency',
+                'language':     language,
+                'llm_used':     llm_used,
+                'session_reset': session_reset
             })
 
         # ── Transaction password ───────────────────────────────────────────────
@@ -521,13 +628,12 @@ def chat_message():
                     'llm_used':   llm_used
                 })
 
+            session_reset = False
+
             if original_intent == 'transfer_money':
-                amount              = entities.get('amount')
-                recipient           = entities.get('recipient')
-                transfer_method     = entities.get('transfer_method')
-                recipient_account   = entities.get('transfer_identifier')
-                purpose             = entities.get('purpose')
-                description         = entities.get('description')
+                amount            = entities.get('amount')
+                recipient         = entities.get('recipient')
+                recipient_account = entities.get('account_number')
 
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
@@ -543,10 +649,10 @@ def chat_message():
                     )
                     c.execute("""
                         INSERT INTO dashboard_transactions
-                            (account_number, transaction_type, description, amount, recipient, status, created_at, category)
-                        VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, %s)
-                    """, (account_number, f"Transfer to {recipient} ({transfer_method}, {purpose})", -amount,
-                          recipient_account, datetime.utcnow().isoformat(), description))
+                            (account_number, transaction_type, description, amount, recipient, status, created_at)
+                        VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s)
+                    """, (account_number, f"Transfer to {recipient}", -amount,
+                          recipient_account, datetime.utcnow().isoformat()))
                     conn.commit()
 
                     ai_response = chatbot.responses['transfer_success'][language].format(
@@ -554,23 +660,21 @@ def chat_message():
                         balance=new_balance, points=points_earned
                     )
                     session['conversation_context'] = {}
+                    session_reset = True
 
             elif original_intent == 'pay_bill':
-                bill_type        = entities.get('bill_category')
-                amount            = entities.get('amount')
-                service_provider  = entities.get('service_provider')
-                bill_account      = entities.get('bill_reference')
+                bill_type    = entities.get('bill_type')
+                amount       = entities.get('amount')
+                bill_account = entities.get('account_number')
 
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
                     session['conversation_context'] = {
                         'current_flow':             'pay_bill',
-                        'bill_category':            bill_type,
-                        'service_provider':         service_provider,
+                        'bill_type':                bill_type,
                         'amount':                   amount,
-                        'bill_reference':           bill_account,
-                        'insufficient_funds_retry': True,
-                        'session_language':         language
+                        'account_number':           bill_account,
+                        'insufficient_funds_retry': True
                     }
                 else:
                     points_earned = int(amount // 1000) * 5
@@ -587,7 +691,7 @@ def chat_message():
                              biller, bill_id, status, created_at)
                         VALUES (%s, 'bill', %s, %s, %s, %s, 'completed', %s)
                     """, (account_number, f"{bill_type} Bill Payment", -amount,
-                          service_provider, bill_account, datetime.utcnow().isoformat()))
+                          bill_type, bill_account, datetime.utcnow().isoformat()))
                     conn.commit()
 
                     ai_response = chatbot.responses['bill_payment_success'][language].format(
@@ -595,6 +699,7 @@ def chat_message():
                         balance=new_balance, points=points_earned
                     )
                     session['conversation_context'] = {}
+                    session_reset = True
 
             elif original_intent == 'redeem_points':
                 redemption_choice = entities.get('redemption_choice')
@@ -630,6 +735,7 @@ def chat_message():
                         balance=new_balance, remaining_points=new_points
                     )
                     session['conversation_context'] = {}
+                    session_reset = True
 
             c.execute("""
                 INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
@@ -640,37 +746,32 @@ def chat_message():
             release_db(conn)
 
             return jsonify({
-                'success':    True,
-                'ai_response': ai_response,
-                'intent':     original_intent,
-                'language':   language,
-                'llm_used':   llm_used
+                'success':      True,
+                'ai_response':  ai_response,
+                'intent':       original_intent,
+                'language':     language,
+                'llm_used':     llm_used,
+                'session_reset': session_reset
             })
 
         # ── Context management ─────────────────────────────────────────────────
         if nlp_result.get('awaiting_emergency_password'):
             session['conversation_context'] = {
                 'awaiting_emergency_password': True,
-                'emergency_attempts': nlp_result.get('emergency_attempts', 3),
-                'session_language': nlp_result.get('session_language')
+                'emergency_attempts': nlp_result.get('emergency_attempts', 3)
             }
         elif nlp_result.get('awaiting_password'):
             session['conversation_context'] = {
                 'awaiting_password': True,
                 'original_intent':  nlp_result.get('original_intent'),
-                'pending_entities': nlp_result.get('pending_entities', {}),
-                'session_language': nlp_result.get('session_language')
+                'pending_entities': nlp_result.get('pending_entities', {})
             }
         elif nlp_result.get('current_flow'):
             context = {'current_flow': nlp_result['current_flow']}
             for key in ['amount', 'recipient', 'bill_type', 'bill_reference',
-                        'redemption_choice', 'account_number', 'flow_state',
-                        'transfer_method', 'transfer_identifier', 'purpose',
-                        'description', 'bill_category', 'service_provider',
-                        'provider_hint']:
+                        'redemption_choice', 'account_number', 'flow_state']:
                 if key in nlp_result:
                     context[key] = nlp_result[key]
-            context['session_language'] = nlp_result.get('session_language')
             session['conversation_context'] = context
         else:
             session['conversation_context'] = {}
@@ -749,11 +850,53 @@ def chat_message():
             'awaiting_password':          awaiting_pw,
             'awaiting_emergency_password': awaiting_emergency_pw,
             'llm_used':                   llm_used,   # ← LLM fallback tracking field
+            'session_reset':              False
         })
 
     except Exception as e:
         print(f"Chat error: {str(e)}")
         return jsonify({'success': False, 'message': 'An error occurred processing your message'}), 500
+
+
+@app.route('/api/chat/history', methods=['GET'])
+def chat_history_get():
+    # Lets Chat.jsx restore the visible conversation on page load / return
+    # from Dashboard, instead of starting blank every time. Pass ?since=
+    # (an ISO timestamp) to only pull messages from the current "session"
+    # onward — the frontend advances that marker whenever the conversation
+    # is reset (cancel or a completed transaction), so this naturally stops
+    # returning old, already-closed conversations.
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    account_number = session['account_number']
+    since = request.args.get('since', '').strip()
+
+    conn = get_db()
+    c    = conn.cursor()
+    try:
+        if since:
+            c.execute("""
+                SELECT id, user_message, ai_response, intent,
+                       COALESCE(sender, 'ai') AS sender, engine, created_at
+                FROM chat_history
+                WHERE account_number = %s AND created_at >= %s
+                ORDER BY created_at ASC
+            """, (account_number, since))
+        else:
+            c.execute("""
+                SELECT id, user_message, ai_response, intent,
+                       COALESCE(sender, 'ai') AS sender, engine, created_at
+                FROM chat_history
+                WHERE account_number = %s
+                ORDER BY created_at ASC
+                LIMIT 200
+            """, (account_number,))
+        messages = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    return jsonify({'success': True, 'messages': messages})
 
 
 @app.route('/api/chat/transcribe', methods=['POST'])
@@ -815,6 +958,22 @@ def human_handoff():
             VALUES (%s, %s, %s, %s, %s)
         """, (account_number, "I want to talk to a human banker", ai_response,
               'human_agent', datetime.utcnow().isoformat()))
+
+        # Also raise the actual support ticket and flip this conversation into
+        # human mode, so it shows up in the admin console (Support Tickets /
+        # Live Chat Monitor) instead of only being logged in chat_history.
+        now = datetime.utcnow().isoformat()
+        c.execute("""
+            INSERT INTO handoff_queue(account_number, reason, status, created_at)
+            VALUES (%s, 'user_requested_human', 'pending', %s)
+        """, (account_number, now))
+        c.execute("""
+            INSERT INTO conversation_state(account_number, mode, assigned_to, updated_at)
+            VALUES (%s, 'human', NULL, %s)
+            ON CONFLICT(account_number) DO UPDATE SET
+                mode='human', assigned_to=NULL, updated_at=EXCLUDED.updated_at
+        """, (account_number, now))
+
         conn.commit()
         release_db(conn)
 
@@ -1135,6 +1294,20 @@ def create_transaction():
                   data.get('billId', 'N/A'), now_iso, category))
 
         transaction_id = c.fetchone()['id']
+
+        # Log the fee for the admin Fee & Revenue panel (transfer_fees table,
+        # queried by admin_routes/fees.py). Logged for every transfer,
+        # including FinBud-to-FinBud transfers where fee is 0, so the ledger
+        # reflects the full transfer volume, not just fee-generating ones.
+        if transaction_type == 'transfer':
+            fee_percentage = (fee / amount) if amount else 0.0
+            c.execute("""
+                INSERT INTO transfer_fees
+                    (transaction_id, account_number, transfer_amount,
+                     fee_amount, fee_percentage, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (transaction_id, account_number, amount, fee,
+                  fee_percentage, now_iso))
 
         new_balance = user['balance'] - total_deducted
         new_points  = user['points'] + points_earned
