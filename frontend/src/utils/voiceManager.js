@@ -39,6 +39,53 @@ export function isVoiceSupported() {
   return !!SpeechRecognitionImpl && typeof window !== 'undefined' && !!window.speechSynthesis
 }
 
+// Urdu-script Unicode range (covers Urdu/Arabic-script text regardless of
+// whether it's actually Arabic vs Urdu - good enough for a language-toggle
+// heuristic in this app, since FinBud only ever produces Urdu-script replies
+// in that range).
+const URDU_SCRIPT_RE = /[\u0600-\u06FF]/
+
+// Common Roman-Urdu words/particles that essentially never appear in plain
+// English sentences - used to catch Roman-Urdu replies (e.g. "Aap ka
+// balance RS 5,000 hai") that are written in Latin script but should still
+// be read aloud with an Urdu voice rather than an English one.
+const ROMAN_URDU_WORD_RE = /\b(hai|hain|kya|kaise|karo|karein|kardo|kar\s*do|bhejo|bhej|bhejna|paisa|paise|paisay|rupay|rupaye|rupaya|aap|apka|apki|shukriya|mera|meri|mere|nahi|nahin|krna|kro|karna|bilkul|theek|acha|zaroor|maloom|batao)\b/i
+
+/**
+ * Picks the right speech-synthesis language tag for a given reply so Urdu
+ * (script or Roman-Urdu) is never read aloud with an English voice.
+ * Returns a BCP-47 tag: 'ur-PK' for Urdu, otherwise 'en-US'.
+ */
+export function detectSpeechLang(text) {
+  if (!text) return 'en-US'
+  if (URDU_SCRIPT_RE.test(text)) return 'ur-PK'
+  if (ROMAN_URDU_WORD_RE.test(text)) return 'ur-PK'
+  return 'en-US'
+}
+
+/**
+ * Best-effort lookup of an installed voice matching `lang` (e.g. 'ur-PK').
+ * Falls back through progressively looser matches (exact -> language-only
+ * prefix -> null) since most browsers/OSes don't ship a dedicated Urdu
+ * voice - when null is returned, `utterance.lang` alone is left to steer
+ * the platform's default voice as closely as possible.
+ */
+function pickVoiceForLang(synth, lang) {
+  if (!synth || !lang) return null
+  let voices = []
+  try { voices = synth.getVoices() || [] } catch { voices = [] }
+  if (!voices.length) return null
+
+  const exact = voices.find(v => v.lang?.toLowerCase() === lang.toLowerCase())
+  if (exact) return exact
+
+  const prefix = lang.split('-')[0].toLowerCase() // 'ur' from 'ur-PK'
+  const byPrefix = voices.find(v => v.lang?.toLowerCase().startsWith(prefix))
+  if (byPrefix) return byPrefix
+
+  return null
+}
+
 export class FinBudVoiceManager {
   /**
    * @param {Object} opts
@@ -102,11 +149,20 @@ export class FinBudVoiceManager {
     }
 
     recognition.onend = () => {
-      // If nothing else has moved us to PROCESSING/SPEAKING and voice mode
-      // is still on, drop back to idle rather than leaving a stale
-      // "listening" indicator on screen.
-      if (this.state === VOICE_STATES.LISTENING) {
-        this._setState(this.isVoiceModeActive ? VOICE_STATES.IDLE : VOICE_STATES.IDLE)
+      // GUARANTEE: recognition ending always resolves the state machine
+      // back to IDLE unless something else has already explicitly moved
+      // it forward (PROCESSING, because onresult fired and handed off to
+      // the caller; or SPEAKING, because TTS started). Previously this
+      // only reset state when we were still LISTENING, which is exactly
+      // right for the common case (silence / user stopped talking) - but
+      // if recognition ends for any OTHER reason while still nominally
+      // "LISTENING" from the state machine's point of view (browser quirks,
+      // rapid stop/start, permission hiccups), leaving that check as the
+      // only branch is what let the mic button get stuck spinning. This
+      // is now the single source of truth: any state other than
+      // PROCESSING/SPEAKING gets force-reset to IDLE on every onend.
+      if (this.state !== VOICE_STATES.PROCESSING && this.state !== VOICE_STATES.SPEAKING) {
+        this._setState(VOICE_STATES.IDLE)
       }
     }
 
@@ -118,7 +174,11 @@ export class FinBudVoiceManager {
     try {
       this.recognition.start()
     } catch {
-      /* already started */
+      // Recognition refused to (re)start (e.g. still tearing down the
+      // previous session). Never leave the UI stuck mid-transition -
+      // fall back to IDLE so the mic button reflects reality and a
+      // subsequent manual tap can recover cleanly.
+      this._setState(VOICE_STATES.IDLE)
     }
   }
 
@@ -153,7 +213,17 @@ export class FinBudVoiceManager {
     try {
       this.recognition.start()
     } catch {
-      /* recognition already running — ignore */
+      // "already started" is genuinely fine (a session is already live,
+      // which is the state we wanted anyway) - but if `state` had already
+      // been set to something transitional before this call, and the
+      // browser then never fires onstart/onend for this attempt, we'd
+      // hang there indefinitely. Reconcile immediately: recognition is
+      // either already listening (leave LISTENING/whatever onstart set)
+      // or genuinely failed to start, in which case IDLE is the only
+      // safe resting state.
+      if (this.state !== VOICE_STATES.LISTENING) {
+        this._setState(VOICE_STATES.IDLE)
+      }
     }
   }
 
@@ -170,12 +240,24 @@ export class FinBudVoiceManager {
   speak(text, { reArm = true } = {}) {
     if (!this.synth || !text) {
       if (this.isVoiceModeActive && reArm) this.startListening()
+      else this._setState(VOICE_STATES.IDLE)
       return
     }
 
     this.synth.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = this.lang
+
+    // Dynamic language detection: an Urdu-script or Roman-Urdu reply must
+    // be read with an Urdu voice, not the default English one - toggle
+    // utterance.lang (and pick a matching installed voice when one
+    // exists) based on the actual text being spoken, rather than always
+    // using this.lang (which reflects the recognition language, not
+    // necessarily the reply language).
+    const speechLang = detectSpeechLang(text)
+    utterance.lang = speechLang
+    const matchedVoice = pickVoiceForLang(this.synth, speechLang)
+    if (matchedVoice) utterance.voice = matchedVoice
+
     utterance.rate = 1.0
     utterance.pitch = 1.0
 
