@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 // ============================================================
@@ -8,165 +8,159 @@ const STRINGS = {
   en: {
     dir: 'ltr',
     tagline: 'Your Voice-Powered Banking Assistant',
+    common: {
+      back: 'Back', continueBtn: 'Continue', resend: 'Resend Code',
+      demoNote: (code) => `Demo mode: your OTP is ${code} (in a live app this would be sent via SMS).`
+    },
     login: {
-      title: 'WELCOME BACK!', sub: 'Sign in to access your account',
-      email: 'Email:', password: 'Password:', loginBtn: 'Log In', loggingIn: 'Logging in...',
-      forgot: 'Forgot password?', newUser: 'New User? Create Account',
-      or: 'OR', fingerprintBtn: 'Use Fingerprint / Face ID', fingerprintChecking: 'Checking...',
-      emailFirst: 'Enter your email above first, then tap fingerprint login.'
-    },
-    phoneCnic: {
-      title: 'LET\'S GET STARTED', sub: 'Enter your phone number and CNIC to verify your identity.',
+      greeting: 'Welcome Back To',
+      title: 'Sign In', sub: 'Sign in to access your account',
       phone: 'Phone Number:', phonePh: '0300-1234567',
+      pin: 'PIN:', loginBtn: 'Log In', loggingIn: 'Logging in...',
+      forgot: 'Forgot PIN?', newUser: 'New User? Create Account',
+      err: 'Enter your phone number and 5-digit PIN.'
+    },
+    phoneStep: {
+      title: "LET'S GET STARTED", sub: "Enter your phone number — we'll text you a one-time code.",
+      phone: 'Phone Number:', phonePh: '0300-1234567',
+      next: 'Send Code', back: 'Already have an account? Log In',
+      phoneErr: 'Enter a valid 11-digit phone number.'
+    },
+    otpStep: {
+      title: 'VERIFY YOUR NUMBER', sub: 'Enter the 6-digit code we sent to your phone.',
+      otp: 'OTP Code:', otpPh: '000000',
+      verify: 'Verify', otpErr: 'Enter the 6-digit code.', back: 'Back'
+    },
+    cnicStep: {
+      title: 'VERIFY YOUR IDENTITY', sub: 'Enter your CNIC number to verify your identity with NADRA.',
       cnic: 'CNIC Number:', cnicPh: '42101-1234567-1',
-      next: 'Continue', back: 'Already have an account? Log In',
-      phoneErr: 'Enter a valid 11-digit phone number.', cnicErr: 'Enter a valid 13-digit CNIC number.'
+      next: 'Continue', back: 'Back', cnicErr: 'Enter a valid 13-digit CNIC number.',
+      verifying: 'Verifying...'
     },
-    createAccount: {
-      title: 'CREATE ACCOUNT', sub: 'Enter your email and password to register.',
-      email: 'Email:', password: 'Create Password:', passwordPh: 'Minimum 4 characters',
-      next: 'Next Step', back: 'Back'
-    },
-    consent: {
-      title: 'BEFORE WE CONTINUE',
-      listen: 'Listen', understand: 'I understand and agree', continueBtn: 'Continue',
-      progress: (n, total) => `${n} of ${total}`,
-      screens: [
-        { heading: 'Why we need your CNIC', body: 'We use your CNIC and phone number to verify it\'s really you, as required by the State Bank of Pakistan. We never share your CNIC with anyone outside FinBud without your permission.' },
-        { heading: 'How we protect your data', body: 'Your information is encrypted and stored securely. You can review or delete what we\'ve stored about you at any time from Settings.' },
-        { heading: 'About the AI Assistant', body: 'FinBud\'s assistant can check your balance, pay bills, and send money when you ask it to. It will always show you the details and ask for your password before moving any money — it never sends money without your confirmation.' }
-      ]
-    },
-    setUsername: {
-      title: 'CHOOSE DISPLAY NAME', sub: 'This name will appear on your dashboard.',
+    setCredentials: {
+      title: 'SET UP YOUR ACCOUNT', sub: 'Choose a display name and a 5-digit PIN. Your phone number will be your account number.',
       name: 'Display Name:', namePh: 'e.g., Alex B.',
-      finish: 'Go to Dashboard', creating: 'Creating Account...', back: 'Cancel & Back to Login'
+      pin: '5-Digit PIN:', confirmPin: 'Confirm PIN:',
+      finish: 'Go to Dashboard', creating: 'Creating Account...', back: 'Back',
+      pinErr: 'PIN must be exactly 5 digits.', mismatchErr: "PINs don't match.",
+      weakErr: 'That PIN is too easy to guess. Please choose another.'
     },
-    biometric: {
-      title: 'SECURE YOUR ACCOUNT', sub: 'Add fingerprint or face login so you don\'t have to type your password every time.',
-      setup: 'Set Up Fingerprint / Face Login', settingUp: 'Waiting for your device...',
-      skip: 'Do this later', success: 'Biometric login is set up! You can use it next time you log in.',
-      unsupported: 'Your device or browser doesn\'t support fingerprint/face login. No problem — you can always use your password.',
-      failed: 'That didn\'t work — you can always use your password instead.', continueBtn: 'Continue'
+    forgotPhone: {
+      title: 'FORGOT PIN', sub: "Enter your phone number and we'll send you a reset code.",
+      phone: 'Phone Number:', phonePh: '0300-1234567',
+      send: 'Send Reset Code', back: 'Back to Login'
     },
-    selfie: {
-      title: 'IDENTITY PHOTO', sub: 'This helps us confirm it\'s really you. This is a photo capture only — full automated identity verification is part of our next development phase.',
-      capture: 'Capture Photo', retake: 'Retake', continueBtn: 'Continue', skip: 'Do this later',
-      camErr: 'Could not access camera. You can skip this step for now.'
-    },
-    forgotPassword: {
-      title: 'FORGOT PASSWORD', sub: 'Enter your email to receive a password reset code.',
-      email: 'Email:', send: 'Send Reset Code', back: 'Back to Login'
+    forgotReset: {
+      title: 'RESET YOUR PIN', sub: 'Enter the code we sent you and choose a new 5-digit PIN.',
+      otp: 'OTP Code:', otpPh: '000000',
+      newPin: 'New PIN:', confirmPin: 'Confirm New PIN:',
+      reset: 'Reset PIN', back: 'Back'
     },
     footer: '© 2026 FinBud AI'
   },
   ur: {
     dir: 'rtl',
     tagline: 'آپ کا آواز سے چلنے والا بینکنگ اسسٹنٹ',
+    common: {
+      back: 'واپس', continueBtn: 'جاری رکھیں', resend: 'کوڈ دوبارہ بھیجیں',
+      demoNote: (code) => `ڈیمو موڈ: آپ کا او ٹی پی ${code} ہے (اصل ایپ میں یہ ایس ایم ایس کے ذریعے بھیجا جائے گا)۔`
+    },
     login: {
-      title: 'خوش آمدید!', sub: 'اپنے اکاؤنٹ تک رسائی کے لیے لاگ ان کریں',
-      email: 'ای میل:', password: 'پاس ورڈ:', loginBtn: 'لاگ ان کریں', loggingIn: 'لاگ ان ہو رہا ہے...',
-      forgot: 'پاس ورڈ بھول گئے؟', newUser: 'نیا صارف؟ اکاؤنٹ بنائیں',
-      or: 'یا', fingerprintBtn: 'فنگر پرنٹ / فیس آئی ڈی استعمال کریں', fingerprintChecking: 'چیک ہو رہا ہے...',
-      emailFirst: 'پہلے اوپر اپنا ای میل درج کریں، پھر فنگر پرنٹ لاگ ان دبائیں۔'
-    },
-    phoneCnic: {
-      title: 'آئیے شروع کرتے ہیں', sub: 'اپنی شناخت کی تصدیق کے لیے فون نمبر اور شناختی کارڈ نمبر درج کریں۔',
+      greeting: 'خوش آمدید',
+      title: 'سائن ان کریں', sub: 'اپنے اکاؤنٹ تک رسائی کے لیے لاگ ان کریں',
       phone: 'فون نمبر:', phonePh: '0300-1234567',
+      pin: 'پن:', loginBtn: 'لاگ ان کریں', loggingIn: 'لاگ ان ہو رہا ہے...',
+      forgot: 'پن بھول گئے؟', newUser: 'نیا صارف؟ اکاؤنٹ بنائیں',
+      err: 'اپنا فون نمبر اور 5 ہندسوں کا پن درج کریں۔'
+    },
+    phoneStep: {
+      title: 'آئیے شروع کرتے ہیں', sub: 'اپنا فون نمبر درج کریں — ہم آپ کو ایک وقتی کوڈ بھیجیں گے۔',
+      phone: 'فون نمبر:', phonePh: '0300-1234567',
+      next: 'کوڈ بھیجیں', back: 'پہلے سے اکاؤنٹ ہے؟ لاگ ان کریں',
+      phoneErr: 'ایک درست 11 ہندسوں کا فون نمبر درج کریں۔'
+    },
+    otpStep: {
+      title: 'اپنا نمبر تصدیق کریں', sub: 'اپنے فون پر بھیجا گیا 6 ہندسوں کا کوڈ درج کریں۔',
+      otp: 'او ٹی پی کوڈ:', otpPh: '000000',
+      verify: 'تصدیق کریں', otpErr: '6 ہندسوں کا کوڈ درج کریں۔', back: 'واپس'
+    },
+    cnicStep: {
+      title: 'اپنی شناخت کی تصدیق کریں', sub: 'نادرا کے ذریعے اپنی شناخت کی تصدیق کے لیے اپنا شناختی کارڈ نمبر درج کریں۔',
       cnic: 'شناختی کارڈ نمبر:', cnicPh: '42101-1234567-1',
-      next: 'جاری رکھیں', back: 'پہلے سے اکاؤنٹ ہے؟ لاگ ان کریں',
-      phoneErr: 'ایک درست 11 ہندسوں کا فون نمبر درج کریں۔', cnicErr: 'ایک درست 13 ہندسوں کا شناختی کارڈ نمبر درج کریں۔'
+      next: 'جاری رکھیں', back: 'واپس', cnicErr: 'ایک درست 13 ہندسوں کا شناختی کارڈ نمبر درج کریں۔',
+      verifying: 'تصدیق ہو رہی ہے...'
     },
-    createAccount: {
-      title: 'اکاؤنٹ بنائیں', sub: 'رجسٹر ہونے کے لیے اپنا ای میل اور پاس ورڈ درج کریں۔',
-      email: 'ای میل:', password: 'پاس ورڈ بنائیں:', passwordPh: 'کم از کم 4 حروف',
-      next: 'اگلا مرحلہ', back: 'واپس'
-    },
-    consent: {
-      title: 'آگے بڑھنے سے پہلے',
-      listen: 'سنیں', understand: 'میں سمجھتا/سمجھتی ہوں اور راضی ہوں', continueBtn: 'جاری رکھیں',
-      progress: (n, total) => `${n} از ${total}`,
-      screens: [
-        { heading: 'ہمیں آپ کا شناختی کارڈ نمبر کیوں چاہیے', body: 'ہم اسٹیٹ بینک آف پاکستان کی ضرورت کے مطابق آپ کی شناخت کی تصدیق کے لیے آپ کا شناختی کارڈ نمبر اور فون نمبر استعمال کرتے ہیں۔ ہم آپ کی اجازت کے بغیر آپ کا شناختی کارڈ نمبر کسی کے ساتھ شیئر نہیں کرتے۔' },
-        { heading: 'ہم آپ کا ڈیٹا کیسے محفوظ رکھتے ہیں', body: 'آپ کی معلومات کو خفیہ اور محفوظ طریقے سے محفوظ کیا جاتا ہے۔ آپ کسی بھی وقت سیٹنگز سے اپنا ڈیٹا دیکھ یا حذف کر سکتے ہیں۔' },
-        { heading: 'اے آئی اسسٹنٹ کے بارے میں', body: 'فن بڈ کا اسسٹنٹ آپ کے کہنے پر بیلنس چیک کر سکتا ہے، بل ادا کر سکتا ہے، اور پیسے بھیج سکتا ہے۔ یہ ہمیشہ آپ کو تفصیلات دکھائے گا اور کوئی بھی رقم بھیجنے سے پہلے آپ کا پاس ورڈ مانگے گا۔' }
-      ]
-    },
-    setUsername: {
-      title: 'ڈسپلے نام منتخب کریں', sub: 'یہ نام آپ کے ڈیش بورڈ پر ظاہر ہوگا۔',
+    setCredentials: {
+      title: 'اپنا اکاؤنٹ سیٹ اپ کریں', sub: 'ایک ڈسپلے نام اور 5 ہندسوں کا پن منتخب کریں۔ آپ کا فون نمبر آپ کا اکاؤنٹ نمبر ہوگا۔',
       name: 'ڈسپلے نام:', namePh: 'مثال کے طور پر، احمد خان',
-      finish: 'ڈیش بورڈ پر جائیں', creating: 'اکاؤنٹ بنایا جا رہا ہے...', back: 'منسوخ کریں اور لاگ ان پر واپس جائیں'
+      pin: '5 ہندسوں کا پن:', confirmPin: 'پن کی تصدیق کریں:',
+      finish: 'ڈیش بورڈ پر جائیں', creating: 'اکاؤنٹ بنایا جا رہا ہے...', back: 'واپس',
+      pinErr: 'پن بالکل 5 ہندسوں کا ہونا چاہیے۔', mismatchErr: 'پن مماثل نہیں ہیں۔',
+      weakErr: 'یہ پن اندازہ لگانا بہت آسان ہے۔ براہ کرم دوسرا منتخب کریں۔'
     },
-    biometric: {
-      title: 'اپنا اکاؤنٹ محفوظ بنائیں', sub: 'فنگر پرنٹ یا فیس لاگ ان شامل کریں تاکہ آپ کو ہر بار پاس ورڈ نہ لکھنا پڑے۔',
-      setup: 'فنگر پرنٹ / فیس لاگ ان سیٹ اپ کریں', settingUp: 'آپ کے ڈیوائس کا انتظار ہے...',
-      skip: 'بعد میں کریں', success: 'بایومیٹرک لاگ ان سیٹ ہو گیا! اگلی بار آپ اسے استعمال کر سکتے ہیں۔',
-      unsupported: 'آپ کا ڈیوائس یا براؤزر فنگر پرنٹ/فیس لاگ ان کو سپورٹ نہیں کرتا۔ کوئی بات نہیں — آپ ہمیشہ پاس ورڈ استعمال کر سکتے ہیں۔',
-      failed: 'یہ کام نہیں ہوا — آپ اس کے بجائے ہمیشہ پاس ورڈ استعمال کر سکتے ہیں۔', continueBtn: 'جاری رکھیں'
+    forgotPhone: {
+      title: 'پن بھول گئے', sub: 'اپنا فون نمبر درج کریں اور ہم آپ کو ری سیٹ کوڈ بھیجیں گے۔',
+      phone: 'فون نمبر:', phonePh: '0300-1234567',
+      send: 'ری سیٹ کوڈ بھیجیں', back: 'لاگ ان پر واپس جائیں'
     },
-    selfie: {
-      title: 'شناختی تصویر', sub: 'یہ ہمیں یقین دلانے میں مدد دیتا ہے کہ یہ واقعی آپ ہیں۔ یہ صرف ایک تصویر کیپچر ہے — مکمل خودکار شناختی تصدیق ہمارے اگلے مرحلے میں شامل ہوگی۔',
-      capture: 'تصویر لیں', retake: 'دوبارہ لیں', continueBtn: 'جاری رکھیں', skip: 'بعد میں کریں',
-      camErr: 'کیمرہ تک رسائی حاصل نہیں ہو سکی۔ آپ فی الحال یہ مرحلہ چھوڑ سکتے ہیں۔'
-    },
-    forgotPassword: {
-      title: 'پاس ورڈ بھول گئے', sub: 'پاس ورڈ ری سیٹ کوڈ حاصل کرنے کے لیے اپنا ای میل درج کریں۔',
-      email: 'ای میل:', send: 'ری سیٹ کوڈ بھیجیں', back: 'لاگ ان پر واپس جائیں'
+    forgotReset: {
+      title: 'اپنا پن ری سیٹ کریں', sub: 'ہم نے آپ کو جو کوڈ بھیجا وہ درج کریں اور ایک نیا 5 ہندسوں کا پن منتخب کریں۔',
+      otp: 'او ٹی پی کوڈ:', otpPh: '000000',
+      newPin: 'نیا پن:', confirmPin: 'نئے پن کی تصدیق کریں:',
+      reset: 'پن ری سیٹ کریں', back: 'واپس'
     },
     footer: '© 2026 فن بڈ اے آئی'
   },
   ru: {
     dir: 'ltr',
     tagline: 'Aap ka Voice-Powered Banking Assistant',
+    common: {
+      back: 'Wapis', continueBtn: 'Jari Rakhein', resend: 'Code Dobara Bhejein',
+      demoNote: (code) => `Demo mode: aap ka OTP ${code} hai (live app mein yeh SMS ke zariye bheja jayega).`
+    },
     login: {
-      title: 'WAPSI MUBARAK!', sub: 'Apne account tak rasai ke liye login karein',
-      email: 'Email:', password: 'Password:', loginBtn: 'Log In', loggingIn: 'Login ho raha hai...',
-      forgot: 'Password bhool gaye?', newUser: 'Naya user? Account banayein',
-      or: 'YA', fingerprintBtn: 'Fingerprint / Face ID istemal karein', fingerprintChecking: 'Check ho raha hai...',
-      emailFirst: 'Pehle upar apna email likhein, phir fingerprint login dabayein.'
-    },
-    phoneCnic: {
-      title: 'CHALEIN SHURU KARTE HAIN', sub: 'Apni pehchan ki tasdeeq ke liye phone number aur CNIC number darj karein.',
+      greeting: 'Wapis Mubarak Ho',
+      title: 'Sign In', sub: 'Apne account tak rasai ke liye login karein',
       phone: 'Phone Number:', phonePh: '0300-1234567',
+      pin: 'PIN:', loginBtn: 'Log In', loggingIn: 'Login ho raha hai...',
+      forgot: 'PIN bhool gaye?', newUser: 'Naya user? Account banayein',
+      err: 'Apna phone number aur 5-digit PIN darj karein.'
+    },
+    phoneStep: {
+      title: 'CHALEIN SHURU KARTE HAIN', sub: 'Apna phone number darj karein — hum aapko ek one-time code bhejein ge.',
+      phone: 'Phone Number:', phonePh: '0300-1234567',
+      next: 'Code Bhejein', back: 'Pehle se account hai? Login Karein',
+      phoneErr: 'Sahi 11-digit phone number darj karein.'
+    },
+    otpStep: {
+      title: 'APNA NUMBER VERIFY KAREIN', sub: 'Aapke phone par bheja gaya 6-digit code darj karein.',
+      otp: 'OTP Code:', otpPh: '000000',
+      verify: 'Verify Karein', otpErr: '6-digit code darj karein.', back: 'Wapis'
+    },
+    cnicStep: {
+      title: 'APNI PEHCHAN VERIFY KAREIN', sub: 'NADRA ke zariye apni pehchan verify karne ke liye CNIC number darj karein.',
       cnic: 'CNIC Number:', cnicPh: '42101-1234567-1',
-      next: 'Continue Karein', back: 'Pehle se account hai? Login Karein',
-      phoneErr: 'Sahi 11-digit phone number darj karein.', cnicErr: 'Sahi 13-digit CNIC number darj karein.'
+      next: 'Jari Rakhein', back: 'Wapis', cnicErr: 'Sahi 13-digit CNIC number darj karein.',
+      verifying: 'Verify ho raha hai...'
     },
-    createAccount: {
-      title: 'ACCOUNT BANAYEIN', sub: 'Register hone ke liye email aur password darj karein.',
-      email: 'Email:', password: 'Password Banayein:', passwordPh: 'Kam se kam 4 characters',
-      next: 'Agla Step', back: 'Wapis'
+    setCredentials: {
+      title: 'APNA ACCOUNT SET UP KAREIN', sub: 'Ek display name aur 5-digit PIN chunein. Aapka phone number aapka account number hoga.',
+      name: 'Display Name:', namePh: 'misaal ke tor par, Ahmed Khan',
+      pin: '5-Digit PIN:', confirmPin: 'PIN Confirm Karein:',
+      finish: 'Dashboard Par Jayein', creating: 'Account Bana Raha Hai...', back: 'Wapis',
+      pinErr: 'PIN bilkul 5 digits ka hona chahiye.', mismatchErr: 'PINs match nahi karte.',
+      weakErr: 'Yeh PIN andaza lagana bohot aasan hai. Doosra chunein.'
     },
-    consent: {
-      title: 'AAGE BADHNE SE PEHLE',
-      listen: 'Sunein', understand: 'Mujhe samajh aa gaya aur main razi hoon', continueBtn: 'Continue Karein',
-      progress: (n, total) => `${n} of ${total}`,
-      screens: [
-        { heading: 'Humein aapka CNIC kyun chahiye', body: 'State Bank of Pakistan ki requirement ke mutabiq, hum aapki pehchan tasdeeq karne ke liye aapka CNIC aur phone number istemal karte hain. Hum aapki ijazat ke baghair aapka CNIC kisi aur ke sath share nahi karte.' },
-        { heading: 'Hum aapka data kaise mehfooz rakhte hain', body: 'Aapki maloomat encrypt aur mehfooz tareeqe se store ki jati hain. Aap kabhi bhi Settings se apna data dekh ya delete kar sakte hain.' },
-        { heading: 'AI Assistant ke baare mein', body: 'FinBud ka assistant aapke kehne par balance check kar sakta hai, bill pay kar sakta hai, aur paisay bhej sakta hai. Yeh hamesha aapko tafseelat dikhayega aur koi bhi paisa bhejne se pehle aapka password poochega.' }
-      ]
+    forgotPhone: {
+      title: 'PIN BHOOL GAYE', sub: 'Apna phone number darj karein, hum aapko reset code bhejein ge.',
+      phone: 'Phone Number:', phonePh: '0300-1234567',
+      send: 'Reset Code Bhejein', back: 'Login Par Wapis Jayein'
     },
-    setUsername: {
-      title: 'DISPLAY NAAM CHUNEIN', sub: 'Yeh naam aapke dashboard par nazar aayega.',
-      name: 'Display Naam:', namePh: 'Misaal ke tor par, Ahmed Khan',
-      finish: 'Dashboard Par Jayein', creating: 'Account banaya ja raha hai...', back: 'Cancel karein aur Login par wapis jayein'
-    },
-    biometric: {
-      title: 'APNA ACCOUNT MEHFOOZ BANAYEIN', sub: 'Fingerprint ya face login add karein taake har bar password type na karna pare.',
-      setup: 'Fingerprint / Face Login Set Up Karein', settingUp: 'Aapke device ka intezar hai...',
-      skip: 'Baad mein karenge', success: 'Biometric login set ho gaya! Agli baar aap ise istemal kar sakte hain.',
-      unsupported: 'Aapka device ya browser fingerprint/face login support nahi karta. Koi baat nahi — aap hamesha password istemal kar sakte hain.',
-      failed: 'Yeh kaam nahi hua — aap iske bajaye hamesha password istemal kar sakte hain.', continueBtn: 'Continue Karein'
-    },
-    selfie: {
-      title: 'PEHCHAN TASVEER', sub: 'Yeh humein yaqeen dilane mein madad deta hai ke yeh waqai aap hain. Yeh sirf ek photo capture hai — mukammal automated identity verification hamare agle phase mein shamil hogi.',
-      capture: 'Tasveer Lein', retake: 'Dobara Lein', continueBtn: 'Continue Karein', skip: 'Baad mein karenge',
-      camErr: 'Camera tak rasai nahi mil saki. Aap filhal yeh step skip kar sakte hain.'
-    },
-    forgotPassword: {
-      title: 'PASSWORD BHOOL GAYE', sub: 'Password reset code hasil karne ke liye apna email darj karein.',
-      email: 'Email:', send: 'Reset Code Bhejein', back: 'Login Par Wapis Jayein'
+    forgotReset: {
+      title: 'APNA PIN RESET KAREIN', sub: 'Humne aapko jo code bheja woh darj karein aur naya 5-digit PIN chunein.',
+      otp: 'OTP Code:', otpPh: '000000',
+      newPin: 'Naya PIN:', confirmPin: 'Naya PIN Confirm Karein:',
+      reset: 'PIN Reset Karein', back: 'Wapis'
     },
     footer: '© 2026 FinBud AI'
   }
@@ -178,7 +172,7 @@ const LANGUAGES = [
   { code: 'ru', label: 'Roman Urdu' }
 ]
 
-const TOTAL_STEPS = 6
+const TOTAL_STEPS = 4 // phone -> otp -> cnic -> setCredentials
 
 // ============================================================
 // HELPERS
@@ -194,85 +188,89 @@ function formatCnic(v) {
   if (digits.length <= 12) return `${digits.slice(0, 5)}-${digits.slice(5)}`
   return `${digits.slice(0, 5)}-${digits.slice(5, 12)}-${digits.slice(12)}`
 }
-
-// WebAuthn base64url <-> ArrayBuffer helpers
-function bufferToBase64url(buffer) {
-  const bytes = new Uint8Array(buffer)
-  let str = ''
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i])
-  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-function base64urlToBuffer(base64url) {
-  const padding = '='.repeat((4 - (base64url.length % 4)) % 4)
-  const base64 = (base64url + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const raw = atob(base64)
-  const buffer = new Uint8Array(raw.length)
-  for (let i = 0; i < raw.length; i++) buffer[i] = raw.charCodeAt(i)
-  return buffer.buffer
-}
+function digitsOnly(v) { return v.replace(/\D/g, '') }
 
 export default function Login() {
   const navigate = useNavigate()
   const [language, setLanguage] = useState('en')
+  const [langOpen, setLangOpen] = useState(false)
   const t = STRINGS[language]
 
-  const [activeCard, setActiveCard] = useState('login')
-  const [tempAccountData, setTempAccountData] = useState({})
-  const [webauthnSupported, setWebauthnSupported] = useState(false)
-
+  // Force a light color scheme regardless of the device/browser dark mode
+  // setting — without this, some mobile browsers auto-invert unstyled
+  // form controls (inputs) into dark grey boxes.
   useEffect(() => {
-    setWebauthnSupported(typeof window !== 'undefined' && !!window.PublicKeyCredential)
+    const meta = document.createElement('meta')
+    meta.name = 'color-scheme'
+    meta.content = 'light'
+    document.head.appendChild(meta)
+    return () => document.head.removeChild(meta)
   }, [])
 
+  const [activeCard, setActiveCard] = useState('login')
+
+  // Signup wizard shared state (the phone number carries through every step)
+  const [signupPhone, setSignupPhone] = useState('')
+
   // Login state
-  const [loginEmail, setLoginEmail] = useState('')
-  const [loginPassword, setLoginPassword] = useState('')
+  const [loginPhone, setLoginPhone] = useState('')
+  const [loginPin, setLoginPin] = useState('')
   const [loginError, setLoginError] = useState('')
   const [loginLoading, setLoginLoading] = useState(false)
-  const [bioLoginLoading, setBioLoginLoading] = useState(false)
 
-  // Phone + CNIC state
+  // Phone step state
   const [phone, setPhone] = useState('')
+  const [phoneError, setPhoneError] = useState('')
+  const [phoneLoading, setPhoneLoading] = useState(false)
+
+  // OTP step state
+  const [otp, setOtp] = useState('')
+  const [otpError, setOtpError] = useState('')
+  const [otpLoading, setOtpLoading] = useState(false)
+  const [devOtp, setDevOtp] = useState('')
+
+  // CNIC step state
   const [cnic, setCnic] = useState('')
-  const [phoneCnicError, setPhoneCnicError] = useState('')
+  const [cnicError, setCnicError] = useState('')
+  const [cnicLoading, setCnicLoading] = useState(false)
 
-  // Create account state
-  const [newEmail, setNewEmail] = useState('')
-  const [newPassword, setNewPassword] = useState('')
-  const [createError, setCreateError] = useState('')
-
-  // Consent state
-  const [consentIndex, setConsentIndex] = useState(0)
-  const [consentChecked, setConsentChecked] = useState(false)
-
-  // Set name state
+  // Set credentials state
   const [displayName, setDisplayName] = useState('')
-  const [nameLoading, setNameLoading] = useState(false)
-  const [nameError, setNameError] = useState('')
+  const [pin, setPin] = useState('')
+  const [confirmPin, setConfirmPin] = useState('')
+  const [credError, setCredError] = useState('')
+  const [credLoading, setCredLoading] = useState(false)
 
-  // Biometric setup state
-  const [bioSetupLoading, setBioSetupLoading] = useState(false)
-  const [bioSetupStatus, setBioSetupStatus] = useState(null) // null | 'success' | 'unsupported' | 'failed'
-
-  // Forgot password state
-  const [resetEmail, setResetEmail] = useState('')
+  // Forgot PIN state
+  const [forgotPhone, setForgotPhone] = useState('')
+  const [forgotDevOtp, setForgotDevOtp] = useState('')
+  const [forgotOtp, setForgotOtp] = useState('')
+  const [forgotNewPin, setForgotNewPin] = useState('')
+  const [forgotConfirmPin, setForgotConfirmPin] = useState('')
+  const [forgotError, setForgotError] = useState('')
+  const [forgotLoading, setForgotLoading] = useState(false)
 
   // ── LOGIN ──────────────────────────────────────────────
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoginError('')
+    const phoneDigits = digitsOnly(loginPhone)
+    if (phoneDigits.length !== 11 || loginPin.length !== 5) {
+      setLoginError(t.login.err); return
+    }
     setLoginLoading(true)
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword })
+        credentials: 'include',
+        body: JSON.stringify({ phone: phoneDigits, pin: loginPin })
       })
       const data = await res.json()
       if (res.ok && data.success) {
         navigate('/dashboard')
       } else {
-        setLoginError(data.message || 'Invalid credentials')
+        setLoginError(data.message || 'Invalid phone number or PIN')
       }
     } catch {
       setLoginError('Server error. Please try again.')
@@ -280,177 +278,181 @@ export default function Login() {
     setLoginLoading(false)
   }
 
-  const handleBiometricLogin = async () => {
-    if (!loginEmail) { setLoginError(t.login.emailFirst); return }
-    setLoginError('')
-    setBioLoginLoading(true)
+  // ── SIGNUP: STEP 1 — PHONE ─────────────────────────────
+  const handlePhoneSubmit = async (e) => {
+    e.preventDefault()
+    setPhoneError('')
+    const phoneDigits = digitsOnly(phone)
+    if (phoneDigits.length !== 11) { setPhoneError(t.phoneStep.phoneErr); return }
+    setPhoneLoading(true)
     try {
-      const optRes = await fetch('/api/auth/webauthn/login/options', {
+      const res = await fetch('/api/auth/register/phone', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail })
-      })
-      if (optRes.status === 404) {
-        setLoginError('Biometric login is not set up for this account yet.')
-        setBioLoginLoading(false); return
-      }
-      const options = await optRes.json()
-      const publicKey = {
-        ...options,
-        challenge: base64urlToBuffer(options.challenge),
-        allowCredentials: (options.allowCredentials || []).map(c => ({ ...c, id: base64urlToBuffer(c.id) }))
-      }
-      const assertion = await navigator.credentials.get({ publicKey })
-      const payload = {
-        email: loginEmail,
-        id: assertion.id,
-        rawId: bufferToBase64url(assertion.rawId),
-        type: assertion.type,
-        response: {
-          authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
-          clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
-          signature: bufferToBase64url(assertion.response.signature)
-        }
-      }
-      const verifyRes = await fetch('/api/auth/webauthn/login/verify', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        credentials: 'include', body: JSON.stringify(payload)
-      })
-      const data = await verifyRes.json()
-      if (data.success) navigate('/dashboard')
-      else setLoginError(data.message || 'Fingerprint login failed. Please use your password.')
-    } catch {
-      setLoginError('Fingerprint login was cancelled or is unavailable.')
-    }
-    setBioLoginLoading(false)
-  }
-
-  // ── SIGNUP WIZARD ──────────────────────────────────────
-  const handlePhoneCnicSubmit = (e) => {
-    e.preventDefault()
-    const phoneDigits = phone.replace(/\D/g, '')
-    const cnicDigits = cnic.replace(/\D/g, '')
-    if (phoneDigits.length !== 11) { setPhoneCnicError(t.phoneCnic.phoneErr); return }
-    if (cnicDigits.length !== 13) { setPhoneCnicError(t.phoneCnic.cnicErr); return }
-    setPhoneCnicError('')
-    setTempAccountData(d => ({ ...d, phone: phoneDigits, cnic: cnicDigits }))
-    setActiveCard('createAccount')
-  }
-
-  const handleCreateAccount = (e) => {
-    e.preventDefault()
-    setTempAccountData(d => ({ ...d, email: newEmail, password: newPassword }))
-    setConsentIndex(0)
-    setConsentChecked(false)
-    setActiveCard('consent')
-  }
-
-  const handleListenConsent = () => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return
-    const screen = t.consent.screens[consentIndex]
-    const utterance = new SpeechSynthesisUtterance(`${screen.heading}. ${screen.body}`)
-    utterance.lang = language === 'ur' ? 'ur-PK' : 'en-US'
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
-  }
-
-  const handleConsentContinue = () => {
-    if (!consentChecked) return
-    const isLast = consentIndex === t.consent.screens.length - 1
-    if (!isLast) {
-      setConsentIndex(i => i + 1)
-      setConsentChecked(false)
-    } else {
-      setTempAccountData(d => ({
-        ...d,
-        consents: { identity: true, data: true, ai_assistant: true },
-        consent_accepted_at: new Date().toISOString(),
-        language
-      }))
-      setActiveCard('setUsername')
-    }
-  }
-
-  const handleSetName = async (e) => {
-    e.preventDefault()
-    setNameError('')
-    setNameLoading(true)
-    try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: displayName,
-          email: tempAccountData.email,
-          password: tempAccountData.password,
-          phone: tempAccountData.phone,
-          cnic: tempAccountData.cnic,
-          language: tempAccountData.language || language,
-          consents: tempAccountData.consents,
-          consent_accepted_at: tempAccountData.consent_accepted_at
-        })
+        body: JSON.stringify({ phone: phoneDigits })
       })
       const data = await res.json()
       if (res.ok && data.success) {
-        setBioSetupStatus(null)
-        setActiveCard('biometric')
+        setSignupPhone(phoneDigits)
+        setDevOtp(data.dev_otp || '')
+        setOtp('')
+        setOtpError('')
+        setActiveCard('otp')
       } else {
-        setNameError(data.message || 'Account creation failed')
+        setPhoneError(data.message || 'Could not send code. Please try again.')
       }
     } catch {
-      setNameError('Server error. Please try again.')
+      setPhoneError('Server error. Please try again.')
     }
-    setNameLoading(false)
+    setPhoneLoading(false)
   }
 
-  // ── BIOMETRIC SETUP ────────────────────────────────────
-  const handleBiometricSetup = async () => {
-    if (!webauthnSupported) { setBioSetupStatus('unsupported'); return }
-    setBioSetupLoading(true)
-    try {
-      const optRes = await fetch('/api/auth/webauthn/register/options', {
-        method: 'POST', credentials: 'include'
-      })
-      if (optRes.status === 404) { setBioSetupStatus('unsupported'); setBioSetupLoading(false); return }
-      const options = await optRes.json()
-      const publicKey = {
-        ...options,
-        challenge: base64urlToBuffer(options.challenge),
-        user: { ...options.user, id: base64urlToBuffer(options.user.id) },
-        excludeCredentials: (options.excludeCredentials || []).map(c => ({ ...c, id: base64urlToBuffer(c.id) }))
-      }
-      const credential = await navigator.credentials.create({ publicKey })
-      const payload = {
-        id: credential.id,
-        rawId: bufferToBase64url(credential.rawId),
-        type: credential.type,
-        response: {
-          attestationObject: bufferToBase64url(credential.response.attestationObject),
-          clientDataJSON: bufferToBase64url(credential.response.clientDataJSON)
-        }
-      }
-      const verifyRes = await fetch('/api/auth/webauthn/register/verify', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        credentials: 'include', body: JSON.stringify(payload)
-      })
-      const data = await verifyRes.json()
-      setBioSetupStatus(data.success ? 'success' : 'failed')
-    } catch {
-      setBioSetupStatus('failed')
-    }
-    setBioSetupLoading(false)
-  }
-
-  // ── FORGOT PASSWORD ────────────────────────────────────
-  const handleForgotPassword = (e) => {
+  // ── SIGNUP: STEP 2 — OTP ───────────────────────────────
+  const handleOtpSubmit = async (e) => {
     e.preventDefault()
-    alert('Password reset feature coming soon! Please contact support.')
-    setActiveCard('login')
+    setOtpError('')
+    if (otp.length !== 6) { setOtpError(t.otpStep.otpErr); return }
+    setOtpLoading(true)
+    try {
+      const res = await fetch('/api/auth/register/verify-otp', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: signupPhone, otp })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setCnic(''); setCnicError('')
+        setActiveCard('cnic')
+      } else {
+        setOtpError(data.message || 'Incorrect code.')
+      }
+    } catch {
+      setOtpError('Server error. Please try again.')
+    }
+    setOtpLoading(false)
+  }
+
+  const handleResendOtp = async () => {
+    setOtpError('')
+    try {
+      const res = await fetch('/api/auth/register/phone', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: signupPhone })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) setDevOtp(data.dev_otp || '')
+      else setOtpError(data.message || 'Could not resend code.')
+    } catch {
+      setOtpError('Server error. Please try again.')
+    }
+  }
+
+  // ── SIGNUP: STEP 3 — CNIC ──────────────────────────────
+  const handleCnicSubmit = async (e) => {
+    e.preventDefault()
+    setCnicError('')
+    const cnicDigits = digitsOnly(cnic)
+    if (cnicDigits.length !== 13) { setCnicError(t.cnicStep.cnicErr); return }
+    setCnicLoading(true)
+    try {
+      const res = await fetch('/api/auth/register/cnic', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: signupPhone, cnic: cnicDigits })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setDisplayName(''); setPin(''); setConfirmPin(''); setCredError('')
+        setActiveCard('setCredentials')
+      } else {
+        setCnicError(data.message || 'CNIC could not be verified.')
+      }
+    } catch {
+      setCnicError('Server error. Please try again.')
+    }
+    setCnicLoading(false)
+  }
+
+  // ── SIGNUP: STEP 4 — DISPLAY NAME + PIN ────────────────
+  const handleSetCredentials = async (e) => {
+    e.preventDefault()
+    setCredError('')
+    if (!displayName.trim()) { setCredError('Please enter a display name.'); return }
+    if (pin.length !== 5) { setCredError(t.setCredentials.pinErr); return }
+    if (pin !== confirmPin) { setCredError(t.setCredentials.mismatchErr); return }
+    setCredLoading(true)
+    try {
+      const res = await fetch('/api/auth/register/complete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ phone: signupPhone, displayName: displayName.trim(), pin })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        navigate('/dashboard')
+      } else {
+        setCredError(data.message || 'Account creation failed')
+      }
+    } catch {
+      setCredError('Server error. Please try again.')
+    }
+    setCredLoading(false)
+  }
+
+  // ── FORGOT PIN ──────────────────────────────────────────
+  const handleForgotPhoneSubmit = async (e) => {
+    e.preventDefault()
+    setForgotError('')
+    const phoneDigits = digitsOnly(forgotPhone)
+    if (phoneDigits.length !== 11) { setForgotError(t.phoneStep.phoneErr); return }
+    setForgotLoading(true)
+    try {
+      const res = await fetch('/api/auth/forgot-pin/request', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phoneDigits })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setForgotPhone(phoneDigits)
+        setForgotDevOtp(data.dev_otp || '')
+        setForgotOtp(''); setForgotNewPin(''); setForgotConfirmPin('')
+        setActiveCard('forgotReset')
+      } else {
+        setForgotError(data.message || 'Could not send reset code.')
+      }
+    } catch {
+      setForgotError('Server error. Please try again.')
+    }
+    setForgotLoading(false)
+  }
+
+  const handleForgotResetSubmit = async (e) => {
+    e.preventDefault()
+    setForgotError('')
+    if (forgotOtp.length !== 6) { setForgotError(t.otpStep.otpErr); return }
+    if (forgotNewPin.length !== 5) { setForgotError(t.setCredentials.pinErr); return }
+    if (forgotNewPin !== forgotConfirmPin) { setForgotError(t.setCredentials.mismatchErr); return }
+    setForgotLoading(true)
+    try {
+      const res = await fetch('/api/auth/forgot-pin/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: digitsOnly(forgotPhone), otp: forgotOtp, newPin: forgotNewPin })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setActiveCard('login')
+        setLoginPhone(forgotPhone); setLoginPin('')
+      } else {
+        setForgotError(data.message || 'Could not reset PIN.')
+      }
+    } catch {
+      setForgotError('Server error. Please try again.')
+    }
+    setForgotLoading(false)
   }
 
   // ── SHARED UI PIECES ────────────────────────────────────
+  // Original pill switcher — kept for desktop, inside the card.
   function LanguageSwitch() {
     return (
-      <div className="lang-switch">
+      <div className="lang-switch lang-switch-card">
         {LANGUAGES.map(l => (
           <button key={l.code} type="button"
             className={`lang-pill ${language === l.code ? 'active' : ''}`}
@@ -459,6 +461,75 @@ export default function Login() {
           </button>
         ))}
       </div>
+    )
+  }
+
+  // Compact dropdown switcher — used in the mobile header, just below
+  // the "Welcome Back" greeting. Shows the active language with a
+  // caret; tapping it reveals the other two options.
+  function LanguageDropdown() {
+    const current = LANGUAGES.find(l => l.code === language) || LANGUAGES[0]
+    return (
+      <div className="lang-switch-header">
+        <div className="lang-dropdown">
+          <button type="button" className="lang-dropdown-trigger"
+            aria-expanded={langOpen} onClick={() => setLangOpen(o => !o)}>
+            {current.label}
+            <svg className={`lang-caret ${langOpen ? 'open' : ''}`} width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {langOpen && (
+            <div className="lang-dropdown-menu">
+              {LANGUAGES.map(l => (
+                <button key={l.code} type="button"
+                  className={`lang-dropdown-item ${l.code === language ? 'active' : ''}`}
+                  onClick={() => { setLanguage(l.code); setLangOpen(false) }}>
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {langOpen && <div className="lang-backdrop" onClick={() => setLangOpen(false)} />}
+      </div>
+    )
+  }
+
+  // Soft decorative background art (mobile only) — blurred white blobs
+  // plus a few thin-line finance / voice doodles, spread across the
+  // solid dark-purple background so it doesn't feel flat.
+  function BackgroundArt() {
+    return (
+      <svg className="bg-art" viewBox="0 0 400 900" preserveAspectRatio="xMidYMin slice"
+        xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <filter id="softBlur" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="36" />
+          </filter>
+        </defs>
+        <circle cx="375" cy="60" r="120" fill="#ffffff" opacity="0.07" filter="url(#softBlur)" />
+        <circle cx="20" cy="420" r="100" fill="#ffffff" opacity="0.08" filter="url(#softBlur)" />
+        <circle cx="365" cy="770" r="90" fill="#ffffff" opacity="0.06" filter="url(#softBlur)" />
+        {/* coin doodle */}
+        <g stroke="#ffffff" strokeWidth="1.6" fill="none" opacity="0.20">
+          <circle cx="56" cy="140" r="21" />
+          <path d="M56 129 v22 M49 135 q7 -5 14 0 M49 146 q7 5 14 0" />
+        </g>
+        {/* voice / sound-wave doodle */}
+        <g stroke="#ffffff" strokeWidth="2" strokeLinecap="round" opacity="0.18">
+          <line x1="302" y1="466" x2="302" y2="494" />
+          <line x1="313" y1="452" x2="313" y2="508" />
+          <line x1="324" y1="466" x2="324" y2="494" />
+          <line x1="335" y1="438" x2="335" y2="522" />
+          <line x1="346" y1="466" x2="346" y2="494" />
+        </g>
+        {/* padlock doodle */}
+        <g stroke="#ffffff" strokeWidth="1.6" fill="none" opacity="0.16">
+          <rect x="326" y="760" width="38" height="28" rx="4" />
+          <path d="M332 760 v-9 a13 13 0 0 1 26 0 v9" />
+        </g>
+      </svg>
     )
   }
 
@@ -475,101 +546,26 @@ export default function Login() {
     )
   }
 
-  // ── SELFIE CAPTURE (own component for camera lifecycle) ─
-  function SelfieCapture() {
-    const videoRef = useRef(null)
-    const canvasRef = useRef(null)
-    const streamRef = useRef(null)
-    const [captured, setCaptured] = useState(null)
-    const [camError, setCamError] = useState('')
-    const [uploading, setUploading] = useState(false)
-
-    useEffect(() => {
-      startCamera()
-      return () => stopCamera()
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
-
-    async function startCamera() {
-      setCamError('')
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
-        streamRef.current = stream
-        if (videoRef.current) videoRef.current.srcObject = stream
-      } catch {
-        setCamError(t.selfie.camErr)
-      }
-    }
-    function stopCamera() {
-      streamRef.current?.getTracks().forEach(tr => tr.stop())
-      streamRef.current = null
-    }
-    function capture() {
-      const video = videoRef.current, canvas = canvasRef.current
-      if (!video || !canvas) return
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      canvas.getContext('2d').drawImage(video, 0, 0)
-      setCaptured(canvas.toDataURL('image/jpeg', 0.85))
-      stopCamera()
-    }
-    function retake() {
-      setCaptured(null)
-      startCamera()
-    }
-    async function finish(skip = false) {
-      setUploading(true)
-      try {
-        if (!skip && captured) {
-          const res = await fetch('/api/auth/selfie', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            credentials: 'include', body: JSON.stringify({ image: captured })
-          })
-          // 404 = endpoint not built yet on backend; don't block onboarding
-          if (res.status !== 404) await res.json().catch(() => {})
-        }
-      } catch { /* non-blocking */ }
-      setUploading(false)
-      navigate('/dashboard')
-    }
-
-    return (
-      <div>
-        <h2>{t.selfie.title}</h2>
-        <p className="sub">{t.selfie.sub}</p>
-        <StepDots current={6} />
-        <div className="camera-frame">
-          {captured
-            ? <img src={captured} alt="Captured selfie" className="camera-preview" />
-            : <video ref={videoRef} autoPlay playsInline muted className="camera-preview" />}
-          <canvas ref={canvasRef} style={{ display: 'none' }} />
-        </div>
-        {camError && <p className="error-message">{camError}</p>}
-        {!captured ? (
-          <button className="primary" type="button" onClick={capture} disabled={!!camError}>{t.selfie.capture}</button>
-        ) : (
-          <>
-            <button className="primary" type="button" onClick={() => finish(false)} disabled={uploading}>
-              {uploading ? '...' : t.selfie.continueBtn}
-            </button>
-            <button className="secondary-btn" type="button" onClick={retake}>{t.selfie.retake}</button>
-          </>
-        )}
-        <div className="links-row">
-          <a className="back-link" onClick={() => finish(true)}>{t.selfie.skip}</a>
-        </div>
-      </div>
-    )
+  function DemoOtpBanner({ code }) {
+    if (!code) return null
+    return <div className="status-box info">{t.common.demoNote(code)}</div>
   }
 
   return (
     <>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+        /* Force a light theme regardless of device/browser dark mode —
+           otherwise some mobile browsers auto-invert unstyled controls
+           (like inputs) into dark grey boxes. */
+        html, body { color-scheme: only light; }
+
         html, body { margin: 0; padding: 0; min-height: 100vh; width: 100%; }
         html { background: #5c2d91; }
         body { background: #5c2d91; }
         #root { display: flex; min-height: 100vh; width: 100%; margin: 0; padding: 0; }
-        * { box-sizing: border-box; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
+        * { box-sizing: border-box; font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
         .split { display: flex; min-height: 100vh; width: 100%; margin: 0; padding: 0; }
         .left-panel {
           flex: 1; background: #5c2d91;
@@ -603,7 +599,9 @@ export default function Login() {
         .login-card input {
           width: 100%; padding: 12px 10px; margin-top: 6px;
           border: 1px solid #e6e9ef; border-radius: 4px; font-size: 14px;
+          background: #fff; color: #111; color-scheme: only light;
         }
+        .login-card input::placeholder { color: #9aa0ab; }
         .primary {
           width: 100%; padding: 14px; margin-top: 22px;
           background: #5c2d91; color: #fff; border: none;
@@ -637,6 +635,40 @@ export default function Login() {
         }
         .lang-pill.active { background: #5c2d91; color: #fff; }
 
+        /* Mobile-only greeting vs desktop brand name */
+        .brand-mobile { display: none; }
+
+        /* Dropdown language switcher — lives in the mobile header;
+           hidden on desktop where the pill switcher (in the card) is used. */
+        .lang-switch-header { display: none; }
+        .lang-dropdown { position: relative; display: inline-flex; }
+        .lang-dropdown-trigger {
+          display: flex; align-items: center; gap: 8px;
+          padding: 7px 16px; border-radius: 20px; border: 1.5px solid #5c2d91;
+          background: #fff; color: #5c2d91; font-size: 13px; font-weight: 700;
+          cursor: pointer;
+        }
+        .lang-caret { transition: transform .15s ease; flex-shrink: 0; }
+        .lang-caret.open { transform: rotate(180deg); }
+        .lang-dropdown-menu {
+          position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+          background: #fff; border: 1.5px solid #5c2d91; border-radius: 12px;
+          min-width: 150px; box-shadow: 0 10px 24px rgba(92,45,145,0.18);
+          overflow: hidden; z-index: 20;
+        }
+        .lang-dropdown-item {
+          display: block; width: 100%; text-align: center; padding: 10px 14px;
+          background: #fff; border: none; border-bottom: 1px solid #f0eaf9;
+          color: #5c2d91; font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        .lang-dropdown-item:last-child { border-bottom: none; }
+        .lang-dropdown-item:hover { background: #f6f2fc; }
+        .lang-dropdown-item.active { background: #f6f2fc; font-weight: 800; }
+        .lang-backdrop { position: fixed; inset: 0; z-index: 10; background: transparent; }
+
+        /* Soft decorative background art — mobile only */
+        .bg-art { display: none; }
+
         /* Wizard step indicator */
         .wizard-steps { display: flex; align-items: center; gap: 6px; margin: 4px 0 22px; }
         .wizard-dot { width: 24px; height: 24px; border-radius: 50%; background: #e9e3f6; color: #5c2d91; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
@@ -644,54 +676,73 @@ export default function Login() {
         .wizard-dot.current { background: #5c2d91; color: #fff; }
         .wizard-line { flex-grow: 1; height: 2px; background: #e9e3f6; margin: 0 2px; }
 
-        /* Fingerprint / biometric */
-        .fingerprint-btn {
-          width: 100%; padding: 14px; margin-top: 18px;
-          background: #f6f2fc; color: #5c2d91; border: 1.5px solid #5c2d91;
-          border-radius: 4px; cursor: pointer; font-weight: 700; font-size: 14px;
-          display: flex; align-items: center; justify-content: center; gap: 10px;
-        }
-        .fingerprint-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .divider-row { display: flex; align-items: center; gap: 10px; margin: 18px 0; }
-        .divider-row .line { flex-grow: 1; height: 1px; background: #e6e9ef; }
-        .divider-row span { font-size: 11px; color: #9aa0ab; font-weight: 700; }
-        .biometric-icon { font-size: 56px; text-align: center; margin: 10px 0 4px; }
-        .status-box { padding: 14px 16px; border-radius: 6px; font-size: 13px; margin-top: 16px; line-height: 1.5; }
-        .status-box.success { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+        .status-box { padding: 14px 16px; border-radius: 6px; font-size: 13px; margin-top: 4px; margin-bottom: 12px; line-height: 1.5; }
         .status-box.info { background: #f6f2fc; color: #5c2d91; border: 1px solid #ddd0f0; }
 
-        /* Consent screens */
-        .consent-box { background: #f6f2fc; padding: 18px; border-radius: 8px; margin: 6px 0 16px; }
-        .consent-box h3 { margin: 0 0 8px; color: #5c2d91; font-size: 16px; }
-        .consent-box p { margin: 0; font-size: 13.5px; line-height: 1.6; color: #333; }
-        .listen-btn { background: none; border: 1px solid #5c2d91; color: #5c2d91; border-radius: 20px; padding: 5px 14px; font-size: 12px; font-weight: 700; cursor: pointer; margin-top: 12px; }
-        .consent-progress { font-size: 12px; color: #9aa0ab; text-align: center; margin-bottom: 8px; }
-        .checkbox-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; font-size: 13.5px; color: #333; }
-        .checkbox-row input { width: auto; margin-top: 3px; }
-
-        /* Selfie / camera */
-        .camera-frame { width: 100%; aspect-ratio: 4/3; background: #111; border-radius: 8px; overflow: hidden; margin: 8px 0 16px; display: flex; align-items: center; justify-content: center; }
-        .camera-preview { width: 100%; height: 100%; object-fit: cover; }
-
+        /* ============================================================
+           MOBILE LAYOUT
+           Below 768px the two-panel split collapses into a single
+           stacked column: a compact brand header up top, the active
+           card takes the full width beneath it. Desktop panels above
+           this breakpoint are untouched.
+        ============================================================ */
         @media (max-width: 768px) {
-          .split { flex-direction: column; }
-          .left-panel { min-height: 180px; }
-          .right-panel { padding: 20px; }
-          .login-card { width: 100%; max-width: 440px; }
+          .split { flex-direction: column; min-height: 100vh; background: #5c2d91; position: relative; }
+          .bg-art { display: block; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+          .left-panel {
+            flex: none; min-height: 0; padding: 46px 20px 30px;
+            background: transparent; position: relative; z-index: 2;
+          }
+          .left-panel .brand, .left-panel .lang-switch-header { position: relative; z-index: 1; }
+          .left-panel .logo-circle { display: none; }
+          .left-panel .brand-desktop { display: none; }
+          .left-panel .brand-mobile {
+            display: block; color: #fff; font-size: 30px; font-weight: 900;
+            letter-spacing: 0.5px; line-height: 1.2; text-transform: uppercase;
+            margin-top: 0;
+          }
+          .left-panel .tagline { display: none; }
+
+          /* Language switcher moves from the card into the header,
+             directly under the "Welcome Back" greeting, and becomes
+             a compact dropdown instead of three pills side by side. */
+          .lang-switch-card { display: none; }
+          .lang-switch-header { display: flex; justify-content: center; margin-top: 18px; }
+
+          .right-panel {
+            flex: 1; padding: 14px 16px 32px; align-items: center;
+            background: transparent; position: relative; z-index: 1;
+          }
+          .login-card {
+            width: 100%; max-width: 100%; padding: 22px 18px; border-radius: 18px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.28); margin-top: -10px;
+          }
+          .login-card h2 { font-size: 19px; }
+          .login-card .sub { font-size: 13px; margin-bottom: 18px; }
+          .login-card label { font-size: 13px; margin-top: 12px; }
+          .login-card input { padding: 11px 10px; font-size: 16px; } /* 16px avoids iOS zoom-on-focus */
+          .primary, .secondary-btn { padding: 13px; margin-top: 16px; font-size: 13px; }
+          .wizard-steps { margin: 2px 0 16px; }
+          .lang-switch { margin-bottom: 14px; gap: 5px; }
+          .lang-pill { padding: 5px 11px; font-size: 11px; }
         }
       `}</style>
 
       <main className="split">
-        {/* LEFT PANEL */}
+        <BackgroundArt />
+
+        {/* LEFT / TOP PANEL */}
         <section className="left-panel">
           <div className="brand">
             <div className="logo-circle">AI</div>
-            <h1>FinBud</h1>
+            <h1 className="brand-desktop">FinBud</h1>
+            <h1 className="brand-mobile">{t.login.greeting}<br />FinBud AI</h1>
             <p className="tagline">{t.tagline}</p>
           </div>
+          <LanguageDropdown />
         </section>
 
-        {/* RIGHT PANEL */}
+        {/* RIGHT / BOTTOM PANEL */}
         <section className="right-panel">
           <div className="login-card" dir={t.dir}>
             <LanguageSwitch />
@@ -700,162 +751,162 @@ export default function Login() {
             {activeCard === 'login' && (
               <div>
                 <h2>{t.login.title}</h2>
-                <p className="sub">{t.login.sub}</p>
                 <form onSubmit={handleLogin}>
-                  <label>{t.login.email}</label>
-                  <input type="email" required placeholder="name@example.com"
-                    value={loginEmail} onChange={e => setLoginEmail(e.target.value)} />
-                  <label>{t.login.password}</label>
-                  <input type="password" required
-                    value={loginPassword} onChange={e => setLoginPassword(e.target.value)} />
+                  <label>{t.login.phone}</label>
+                  <input type="tel" required inputMode="numeric" placeholder={t.login.phonePh} maxLength={12}
+                    value={loginPhone} onChange={e => setLoginPhone(formatPhone(e.target.value))} />
+                  <label>{t.login.pin}</label>
+                  <input type="password" required inputMode="numeric" maxLength={5}
+                    value={loginPin} onChange={e => setLoginPin(digitsOnly(e.target.value).slice(0, 5))} />
                   {loginError && <p className="error-message">{loginError}</p>}
                   <button className="primary" type="submit" disabled={loginLoading}>
                     {loginLoading ? t.login.loggingIn : t.login.loginBtn}
                   </button>
                 </form>
-
-                {webauthnSupported && (
-                  <>
-                    <div className="divider-row"><div className="line" /><span>{t.login.or}</span><div className="line" /></div>
-                    <button type="button" className="fingerprint-btn" onClick={handleBiometricLogin} disabled={bioLoginLoading}>
-                      🔒 {bioLoginLoading ? t.login.fingerprintChecking : t.login.fingerprintBtn}
-                    </button>
-                  </>
-                )}
-
                 <div className="links-row">
-                  <a onClick={() => setActiveCard('forgotPassword')}>{t.login.forgot}</a>
-                  <a onClick={() => setActiveCard('phoneCnic')}>{t.login.newUser}</a>
+                  <a onClick={() => { setForgotError(''); setActiveCard('forgotPhone') }}>{t.login.forgot}</a>
+                  <a onClick={() => { setPhoneError(''); setPhone(''); setActiveCard('phone') }}>{t.login.newUser}</a>
                 </div>
               </div>
             )}
 
-            {/* STEP 1: PHONE + CNIC */}
-            {activeCard === 'phoneCnic' && (
+            {/* SIGNUP STEP 1: PHONE */}
+            {activeCard === 'phone' && (
               <div>
-                <h2>{t.phoneCnic.title}</h2>
-                <p className="sub">{t.phoneCnic.sub}</p>
+                <h2>{t.phoneStep.title}</h2>
+                <p className="sub">{t.phoneStep.sub}</p>
                 <StepDots current={1} />
-                <form onSubmit={handlePhoneCnicSubmit}>
-                  <label>{t.phoneCnic.phone}</label>
-                  <input type="tel" required inputMode="numeric" placeholder={t.phoneCnic.phonePh}
-                    value={phone} onChange={e => setPhone(formatPhone(e.target.value))} maxLength={12} />
-                  <label>{t.phoneCnic.cnic}</label>
-                  <input type="text" required inputMode="numeric" placeholder={t.phoneCnic.cnicPh}
-                    value={cnic} onChange={e => setCnic(formatCnic(e.target.value))} maxLength={15} />
-                  {phoneCnicError && <p className="error-message">{phoneCnicError}</p>}
-                  <button className="primary" type="submit">{t.phoneCnic.next}</button>
+                <form onSubmit={handlePhoneSubmit}>
+                  <label>{t.phoneStep.phone}</label>
+                  <input type="tel" required inputMode="numeric" placeholder={t.phoneStep.phonePh} maxLength={12}
+                    value={phone} onChange={e => setPhone(formatPhone(e.target.value))} />
+                  {phoneError && <p className="error-message">{phoneError}</p>}
+                  <button className="primary" type="submit" disabled={phoneLoading}>
+                    {phoneLoading ? '...' : t.phoneStep.next}
+                  </button>
                 </form>
                 <div className="links-row">
-                  <a className="back-link" onClick={() => setActiveCard('login')}>{t.phoneCnic.back}</a>
+                  <a className="back-link" onClick={() => setActiveCard('login')}>{t.phoneStep.back}</a>
                 </div>
               </div>
             )}
 
-            {/* STEP 2: CREATE ACCOUNT */}
-            {activeCard === 'createAccount' && (
+            {/* SIGNUP STEP 2: OTP */}
+            {activeCard === 'otp' && (
               <div>
-                <h2>{t.createAccount.title}</h2>
-                <p className="sub">{t.createAccount.sub}</p>
+                <h2>{t.otpStep.title}</h2>
+                <p className="sub">{t.otpStep.sub}</p>
                 <StepDots current={2} />
-                <form onSubmit={handleCreateAccount}>
-                  <label>{t.createAccount.email}</label>
-                  <input type="email" required placeholder="name@example.com"
-                    value={newEmail} onChange={e => setNewEmail(e.target.value)} />
-                  <label>{t.createAccount.password}</label>
-                  <input type="password" required minLength={4} placeholder={t.createAccount.passwordPh}
-                    value={newPassword} onChange={e => setNewPassword(e.target.value)} />
-                  {createError && <p className="error-message">{createError}</p>}
-                  <button className="primary" type="submit">{t.createAccount.next}</button>
+                <DemoOtpBanner code={devOtp} />
+                <form onSubmit={handleOtpSubmit}>
+                  <label>{t.otpStep.otp}</label>
+                  <input type="text" required inputMode="numeric" placeholder={t.otpStep.otpPh} maxLength={6}
+                    value={otp} onChange={e => setOtp(digitsOnly(e.target.value).slice(0, 6))} />
+                  {otpError && <p className="error-message">{otpError}</p>}
+                  <button className="primary" type="submit" disabled={otpLoading}>
+                    {otpLoading ? '...' : t.otpStep.verify}
+                  </button>
                 </form>
                 <div className="links-row">
-                  <a className="back-link" onClick={() => setActiveCard('phoneCnic')}>{t.createAccount.back}</a>
+                  <a className="back-link" onClick={() => setActiveCard('phone')}>{t.otpStep.back}</a>
+                </div>
+                <div className="links-row">
+                  <a className="back-link" onClick={handleResendOtp}>{t.common.resend}</a>
                 </div>
               </div>
             )}
 
-            {/* STEP 3: CONSENT */}
-            {activeCard === 'consent' && (
+            {/* SIGNUP STEP 3: CNIC */}
+            {activeCard === 'cnic' && (
               <div>
-                <h2>{t.consent.title}</h2>
+                <h2>{t.cnicStep.title}</h2>
+                <p className="sub">{t.cnicStep.sub}</p>
                 <StepDots current={3} />
-                <p className="consent-progress">{t.consent.progress(consentIndex + 1, t.consent.screens.length)}</p>
-                <div className="consent-box">
-                  <h3>{t.consent.screens[consentIndex].heading}</h3>
-                  <p>{t.consent.screens[consentIndex].body}</p>
-                  <button type="button" className="listen-btn" onClick={handleListenConsent}>🔊 {t.consent.listen}</button>
+                <form onSubmit={handleCnicSubmit}>
+                  <label>{t.cnicStep.cnic}</label>
+                  <input type="text" required inputMode="numeric" placeholder={t.cnicStep.cnicPh} maxLength={15}
+                    value={cnic} onChange={e => setCnic(formatCnic(e.target.value))} />
+                  {cnicError && <p className="error-message">{cnicError}</p>}
+                  <button className="primary" type="submit" disabled={cnicLoading}>
+                    {cnicLoading ? t.cnicStep.verifying : t.cnicStep.next}
+                  </button>
+                </form>
+                <div className="links-row">
+                  <a className="back-link" onClick={() => setActiveCard('otp')}>{t.cnicStep.back}</a>
                 </div>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={consentChecked} onChange={e => setConsentChecked(e.target.checked)} />
-                  <span>{t.consent.understand}</span>
-                </label>
-                <button className="primary" type="button" disabled={!consentChecked} onClick={handleConsentContinue}>
-                  {t.consent.continueBtn}
-                </button>
               </div>
             )}
 
-            {/* STEP 4: SET USERNAME */}
-            {activeCard === 'setUsername' && (
+            {/* SIGNUP STEP 4: DISPLAY NAME + PIN */}
+            {activeCard === 'setCredentials' && (
               <div>
-                <h2>{t.setUsername.title}</h2>
-                <p className="sub">{t.setUsername.sub}</p>
+                <h2>{t.setCredentials.title}</h2>
+                <p className="sub">{t.setCredentials.sub}</p>
                 <StepDots current={4} />
-                <form onSubmit={handleSetName}>
-                  <label>{t.setUsername.name}</label>
-                  <input type="text" required placeholder={t.setUsername.namePh}
+                <form onSubmit={handleSetCredentials}>
+                  <label>{t.setCredentials.name}</label>
+                  <input type="text" required placeholder={t.setCredentials.namePh}
                     value={displayName} onChange={e => setDisplayName(e.target.value)} />
-                  {nameError && <p className="error-message">{nameError}</p>}
-                  <button className="primary" type="submit" disabled={nameLoading}>
-                    {nameLoading ? t.setUsername.creating : t.setUsername.finish}
+                  <label>{t.setCredentials.pin}</label>
+                  <input type="password" required inputMode="numeric" maxLength={5}
+                    value={pin} onChange={e => setPin(digitsOnly(e.target.value).slice(0, 5))} />
+                  <label>{t.setCredentials.confirmPin}</label>
+                  <input type="password" required inputMode="numeric" maxLength={5}
+                    value={confirmPin} onChange={e => setConfirmPin(digitsOnly(e.target.value).slice(0, 5))} />
+                  {credError && <p className="error-message">{credError}</p>}
+                  <button className="primary" type="submit" disabled={credLoading}>
+                    {credLoading ? t.setCredentials.creating : t.setCredentials.finish}
                   </button>
                 </form>
                 <div className="links-row">
-                  <a className="back-link" onClick={() => setActiveCard('login')}>{t.setUsername.back}</a>
+                  <a className="back-link" onClick={() => setActiveCard('cnic')}>{t.setCredentials.back}</a>
                 </div>
               </div>
             )}
 
-            {/* STEP 5: BIOMETRIC SETUP */}
-            {activeCard === 'biometric' && (
+            {/* FORGOT PIN — STEP A: PHONE */}
+            {activeCard === 'forgotPhone' && (
               <div>
-                <h2>{t.biometric.title}</h2>
-                <p className="sub">{t.biometric.sub}</p>
-                <StepDots current={5} />
-                <div className="biometric-icon">🔒</div>
-
-                {bioSetupStatus === 'success' && <div className="status-box success">{t.biometric.success}</div>}
-                {bioSetupStatus === 'unsupported' && <div className="status-box info">{t.biometric.unsupported}</div>}
-                {bioSetupStatus === 'failed' && <div className="status-box info">{t.biometric.failed}</div>}
-
-                {bioSetupStatus !== 'success' && bioSetupStatus !== 'unsupported' && (
-                  <button className="primary" type="button" onClick={handleBiometricSetup} disabled={bioSetupLoading}>
-                    {bioSetupLoading ? t.biometric.settingUp : t.biometric.setup}
+                <h2>{t.forgotPhone.title}</h2>
+                <p className="sub">{t.forgotPhone.sub}</p>
+                <form onSubmit={handleForgotPhoneSubmit}>
+                  <label>{t.forgotPhone.phone}</label>
+                  <input type="tel" required inputMode="numeric" placeholder={t.forgotPhone.phonePh} maxLength={12}
+                    value={forgotPhone} onChange={e => setForgotPhone(formatPhone(e.target.value))} />
+                  {forgotError && <p className="error-message">{forgotError}</p>}
+                  <button className="primary" type="submit" disabled={forgotLoading}>
+                    {forgotLoading ? '...' : t.forgotPhone.send}
                   </button>
-                )}
-
-                <button className="secondary-btn" type="button" onClick={() => setActiveCard('selfieCapture')}>
-                  {bioSetupStatus ? t.biometric.continueBtn : t.biometric.skip}
-                </button>
+                </form>
+                <div className="links-row">
+                  <a className="back-link" onClick={() => setActiveCard('login')}>{t.forgotPhone.back}</a>
+                </div>
               </div>
             )}
 
-            {/* STEP 6: SELFIE */}
-            {activeCard === 'selfieCapture' && <SelfieCapture />}
-
-            {/* FORGOT PASSWORD */}
-            {activeCard === 'forgotPassword' && (
+            {/* FORGOT PIN — STEP B: OTP + NEW PIN */}
+            {activeCard === 'forgotReset' && (
               <div>
-                <h2>{t.forgotPassword.title}</h2>
-                <p className="sub">{t.forgotPassword.sub}</p>
-                <form onSubmit={handleForgotPassword}>
-                  <label>{t.forgotPassword.email}</label>
-                  <input type="email" required placeholder="name@example.com"
-                    value={resetEmail} onChange={e => setResetEmail(e.target.value)} />
-                  <button className="primary" type="submit">{t.forgotPassword.send}</button>
+                <h2>{t.forgotReset.title}</h2>
+                <p className="sub">{t.forgotReset.sub}</p>
+                <DemoOtpBanner code={forgotDevOtp} />
+                <form onSubmit={handleForgotResetSubmit}>
+                  <label>{t.forgotReset.otp}</label>
+                  <input type="text" required inputMode="numeric" placeholder={t.forgotReset.otpPh} maxLength={6}
+                    value={forgotOtp} onChange={e => setForgotOtp(digitsOnly(e.target.value).slice(0, 6))} />
+                  <label>{t.forgotReset.newPin}</label>
+                  <input type="password" required inputMode="numeric" maxLength={5}
+                    value={forgotNewPin} onChange={e => setForgotNewPin(digitsOnly(e.target.value).slice(0, 5))} />
+                  <label>{t.forgotReset.confirmPin}</label>
+                  <input type="password" required inputMode="numeric" maxLength={5}
+                    value={forgotConfirmPin} onChange={e => setForgotConfirmPin(digitsOnly(e.target.value).slice(0, 5))} />
+                  {forgotError && <p className="error-message">{forgotError}</p>}
+                  <button className="primary" type="submit" disabled={forgotLoading}>
+                    {forgotLoading ? '...' : t.forgotReset.reset}
+                  </button>
                 </form>
                 <div className="links-row">
-                  <a className="back-link" onClick={() => setActiveCard('login')}>{t.forgotPassword.back}</a>
+                  <a className="back-link" onClick={() => setActiveCard('forgotPhone')}>{t.forgotReset.back}</a>
                 </div>
               </div>
             )}

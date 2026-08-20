@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Login from './pages/Login.jsx'
 import Dashboard from './pages/Dashboard.jsx'
-import Chat from './pages/Chat.jsx'
+import ChatResponsive from './pages/ChatResponsive.jsx'
 
 import { AdminAuthProvider } from './context/AdminAuthContext.jsx'
 import AdminLayout from './components/layout/AdminLayout.jsx'
@@ -25,7 +25,7 @@ export default function App() {
         {/* Customer app — unchanged */}
         <Route path="/" element={<Login />} />
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/chat" element={<Chat />} />
+        <Route path="/chat" element={<ChatResponsive />} />
 
         {/* Admin console — unlinked from the customer app on purpose.
             /admin/login has no wrapper (not authenticated yet). Every

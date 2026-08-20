@@ -1,329 +1,18 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useChatController } from './useChatController'
 
 export default function Chat() {
   const navigate = useNavigate()
-  const messagesEndRef = useRef(null)
-  const printRef = useRef(null)
-  const mediaRecorderRef = useRef(null)
-  const audioChunksRef = useRef([])
-  const audioStreamRef = useRef(null)
-
-  const [messages, setMessages] = useState([])
-  const [inputText, setInputText] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [isRecording, setIsRecording] = useState(false)
-  const [hasCard, setHasCard] = useState(true)
-  const [modal, setModal] = useState(null)
-  const [pendingInfo, setPendingInfo] = useState(null)
-  const [lastBillType, setLastBillType] = useState(null)
-
-  useEffect(() => {
-    checkCard()
-    // Module F: Dashboard.jsx sets these on <html> and they persist across
-    // client-side navigation, but if a user lands directly on /chat (e.g. a
-    // deep link or a fresh tab), apply the saved preference here too.
-    document.documentElement.setAttribute('data-font-size', localStorage.getItem('finbud_font_size') || 'default')
-    document.documentElement.setAttribute('data-contrast', localStorage.getItem('finbud_high_contrast') === 'true' ? 'high' : 'default')
-  }, [])
-
-  function speak(text) {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return
-    window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'en-US'
-    window.speechSynthesis.speak(utterance)
-  }
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isLoading])
-
-  async function checkCard() {
-    try {
-      const res = await fetch('/api/cards/check', { credentials: 'include' })
-      const data = await res.json()
-      setHasCard(!!data.has_card)
-    } catch { setHasCard(true) }
-  }
-
-  function appendMessage(text, type) {
-    setMessages(prev => [...prev, { text, type, id: Date.now() + Math.random() }])
-  }
-
-  async function postChat(message) {
-    const res = await fetch('/api/chat/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ message })
-    })
-    return res.json()
-  }
-
-  async function maybePrefill(data) {
-    const bt = data.entities && data.entities.bill_type
-    if (!bt || bt === lastBillType) return
-    setLastBillType(bt)
-    try {
-      const res = await fetch(`/api/bills/saved-ref?provider=${encodeURIComponent(bt)}`, { credentials: 'include' })
-      if (res.ok) {
-        const d = await res.json()
-        if (d.success && d.has_saved_ref && d.ref) {
-          setInputText(d.ref)
-          return
-        }
-      }
-    } catch {}
-  }
-
-  async function handleResponse(data, { emergencyFlow = false } = {}) {
-    if (!data.success) {
-      appendMessage('Sorry, I encountered an error. Please try again.', 'ai')
-      return
-    }
-
-    appendMessage(data.ai_response, 'ai')
-
-    const needsPw  = data.awaiting_password
-    const needsEPw = data.awaiting_emergency_password
-
-    if (!needsPw && !needsEPw && !emergencyFlow) return
-    if ((needsEPw || emergencyFlow) && !hasCard) return
-
-    const e      = data.entities || {}
-    const intent = data.intent   || ''
-
-    let config = {}
-
-    if (needsEPw || emergencyFlow) {
-      config = {
-        type: 'emergency',
-        title: 'Emergency: Lock All Cards',
-        confirmLabel: 'LOCK CARDS NOW',
-        summaryRows: [{ label: 'Action', value: 'Lock all registered cards immediately' }],
-        intent, entities: e
-      }
-    } else if (intent === 'pay_bill' || e.bill_type) {
-      const amt    = e.amount    ? `RS ${parseFloat(e.amount).toLocaleString('en-PK')}` : '—'
-      const biller = e.bill_type || e.biller || '—'
-      const ref    = e.bill_reference || e.account_number || e.bill_id || '—'
-      config = {
-        type: 'confirm',
-        title: 'Confirm Bill Payment',
-        confirmLabel: 'CONFIRM & PAY',
-        summaryRows: [
-          { label: 'Biller',           value: biller },
-          { label: 'Reference Number', value: ref    },
-          { label: 'Amount',           value: amt    }
-        ],
-        intent, entities: e
-      }
-    } else {
-      const amt   = e.amount    ? `PKR ${parseFloat(e.amount).toLocaleString('en-PK')}` : '—'
-      const recip = e.recipient || e.recipient_name || '—'
-      const iban  = e.account_number || e.recipient_account || '—'
-      const purp  = e.purpose   || 'Personal'
-      config = {
-        type: 'confirm',
-        title: 'Confirm Transfer',
-        confirmLabel: 'CONFIRM & SEND',
-        summaryRows: [
-          { label: 'Recipient', value: recip },
-          { label: 'IBAN',      value: iban  },
-          { label: 'Amount',    value: amt   },
-          { label: 'Purpose',   value: purp  }
-        ],
-        intent, entities: e
-      }
-    }
-
-    setPendingInfo(config)
-    setModal('password')
-  }
-
-  async function submitPassword(password) {
-    setModal('processing')
-    try {
-      const vRes  = await fetch('/api/user/verify-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ password })
-      })
-      const vData = await vRes.json()
-      if (!vData.success) {
-        setModal('passwordError')
-        return
-      }
-    } catch {}
-
-    let pwData
-    try {
-      pwData = await postChat(password)
-    } catch {
-      setModal(null)
-      appendMessage('Sorry, something went wrong. Please try again.', 'ai')
-      return
-    }
-
-    if (!pwData || !pwData.success) {
-      setModal(null)
-      appendMessage(pwData?.ai_response || 'Sorry, something went wrong.', 'ai')
-      return
-    }
-
-    if (pendingInfo?.type === 'emergency') {
-      setModal(null)
-      appendMessage(pwData.ai_response, 'ai')
-    } else if (pendingInfo?.intent === 'pay_bill' || pendingInfo?.entities?.bill_type) {
-      appendMessage(pwData.ai_response, 'ai')
-      setModal('billSuccess')
-      setPendingInfo(prev => ({ ...prev, txData: pwData }))
-    } else {
-      appendMessage(pwData.ai_response, 'ai')
-      setModal('transferSuccess')
-      setPendingInfo(prev => ({ ...prev, txData: pwData }))
-    }
-  }
-
-  async function sendMessage(text) {
-    const userText = (text || inputText).trim()
-    if (!userText) return
-
-    setMessages(prev => prev.filter(m => m.type !== 'welcome'))
-    appendMessage(userText, 'user')
-    setInputText('')
-    setLastBillType(null)
-    setIsLoading(true)
-
-    let data
-    try {
-      data = await postChat(userText)
-    } catch {
-      setIsLoading(false)
-      appendMessage('Sorry, I could not connect to the server. Please check your connection and try again.', 'ai')
-      return
-    }
-
-    setIsLoading(false)
-    await maybePrefill(data)
-    await handleResponse(data)
-  }
-
-  async function toggleRecording() {
-    if (isRecording) {
-      mediaRecorderRef.current?.stop()
-      audioStreamRef.current?.getTracks().forEach(t => t.stop())
-      setIsRecording(false)
-      return
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      audioStreamRef.current = stream
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-      audioChunksRef.current = []
-      recorder.ondataavailable = e => audioChunksRef.current.push(e.data)
-      recorder.onstart = () => setIsRecording(true)
-      recorder.onstop = () => {
-        setIsRecording(false)
-        processVoiceMessage()
-      }
-      recorder.start()
-      mediaRecorderRef.current = recorder
-    } catch {
-      appendMessage('Error: Could not access microphone. Please ensure permissions are granted.', 'ai')
-    }
-  }
-
-  async function processVoiceMessage() {
-    const hardcoded = 'mera balance kitna hai'
-    setMessages(prev => prev.filter(m => m.type !== 'welcome'))
-    appendMessage(hardcoded, 'user')
-    setIsLoading(true)
-    let data
-    try { data = await postChat(hardcoded) }
-    catch {
-      setIsLoading(false)
-      appendMessage('Sorry, I could not connect to the server.', 'ai')
-      return
-    }
-    setIsLoading(false)
-    await handleResponse(data)
-  }
-
-  async function handleHumanHandoff() {
-    setMessages(prev => prev.filter(m => m.type !== 'welcome'))
-    appendMessage('I want to talk to a human banker', 'user')
-    setIsLoading(true)
-    try {
-      const res  = await fetch('/api/chat/human-handoff', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include'
-      })
-      const data = await res.json()
-      setIsLoading(false)
-      appendMessage(data.success ? data.ai_response : 'Sorry, I encountered an error.', 'ai')
-    } catch {
-      setIsLoading(false)
-      appendMessage('Sorry, I could not connect to the server.', 'ai')
-    }
-  }
-
-  async function handleEmergency() {
-    if (!hasCard) return
-    setMessages(prev => prev.filter(m => m.type !== 'welcome'))
-    appendMessage('EMERGENCY - Lock my cards!', 'user')
-    setIsLoading(true)
-    let data
-    try {
-      const res = await fetch('/api/chat/emergency', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include'
-      })
-      data = await res.json()
-    } catch {
-      setIsLoading(false)
-      appendMessage('Sorry, I could not connect to the server.', 'ai')
-      return
-    }
-    setIsLoading(false)
-    await handleResponse(data, { emergencyFlow: true })
-  }
-
-  function renderPrint(receipt) {
-    if (!printRef.current) return
-    const amt = Math.abs(receipt.amount).toLocaleString('en-PK')
-    printRef.current.innerHTML = `
-      <div class="r-header"><h2>FinBud AI — Transaction Receipt</h2><p>${receipt.date} · ${receipt.time}</p></div>
-      <div class="r-row"><span>Transaction ID</span><strong>#${receipt.transaction_id}</strong></div>
-      <div class="r-row"><span>Account</span><strong>${receipt.account_number}</strong></div>
-      <div class="r-row"><span>Type</span><strong>${receipt.transaction_type}</strong></div>
-      <div class="r-row"><span>Description</span><strong>${receipt.description}</strong></div>
-      ${receipt.recipient ? `<div class="r-row"><span>Recipient</span><strong>${receipt.recipient}</strong></div>` : ''}
-      ${receipt.biller   ? `<div class="r-row"><span>Biller</span><strong>${receipt.biller}</strong></div>`       : ''}
-      <div class="r-row"><span>Amount</span><strong>PKR ${amt}</strong></div>
-      <div class="r-row"><span>Status</span><strong>${receipt.status}</strong></div>
-    `
-  }
-
-  async function downloadReceipt(txId) {
-    if (!txId) { alert('Receipt not available.'); return }
-    try {
-      const res  = await fetch(`/api/transaction/${txId}/receipt`, { credentials: 'include' })
-      const data = await res.json()
-      if (data.success) { renderPrint(data.receipt); setTimeout(() => window.print(), 200) }
-      else alert('Could not load receipt: ' + (data.message || 'Unknown error'))
-    } catch { alert('Server error loading receipt.') }
-  }
-
-  async function emailReceipt(txId) {
-    try {
-      const res = await fetch(`/api/transaction/${txId}/email-receipt`, { method: 'POST', credentials: 'include' })
-      if (res.status === 404) { alert('Email receipts are part of our Phase 2 rollout. Please download the PDF for now.'); return }
-      const data = await res.json()
-      if (data.success) alert('Receipt emailed to your registered address!')
-      else alert('Could not send: ' + (data.message || 'Please download instead.'))
-    } catch { alert('Email receipts are part of our Phase 2 rollout. Please download the PDF for now.') }
-  }
+  const {
+    messagesEndRef, printRef,
+    messages, inputText, setInputText, isLoading,
+    voiceState, isVoiceModeActive,
+    hasCard, modal, setModal, pendingInfo,
+    speak, toggleVoiceMode, openAdvisor,
+    sendMessage, handleHumanHandoff, handleEmergency,
+    submitPassword, downloadReceipt, emailReceipt,
+  } = useChatController()
 
   // ── PASSWORD MODAL ───────────────────────────────────────
   function PasswordModal() {
@@ -471,9 +160,14 @@ export default function Chat() {
         .input-area button { background:var(--primary-purple); color:#fff; border:none; border-radius:8px; padding:12px; font-weight:600; cursor:pointer; transition:opacity 0.2s; }
         .input-area button:hover { opacity:0.9; }
         .mic-btn { background:var(--secondary-purple) !important; color:var(--primary-purple) !important; width:50px; padding:12px 0 !important; border:1px solid rgba(92,45,145,0.3) !important; font-size:18px; }
-        .mic-btn.recording { background:var(--danger) !important; color:#fff !important; border-color:var(--danger) !important; animation:pulse 1.5s infinite; }
+        /* Hands-free voice states: idle (mic on, not yet active) / listening (pulsing red) / processing (spinner) / speaking (waveform) */
+        .mic-btn.idle { background:var(--primary-purple) !important; color:#fff !important; border-color:var(--primary-purple) !important; }
+        .mic-btn.listening { background:var(--danger) !important; color:#fff !important; border-color:var(--danger) !important; animation:pulse 1.5s infinite; }
+        .mic-btn.processing { background:var(--primary-purple) !important; color:#fff !important; border-color:var(--primary-purple) !important; }
+        .mic-btn.speaking { background:#15803d !important; color:#fff !important; border-color:#15803d !important; animation:speakGlow 1.2s infinite; }
         .send-btn { padding:12px 20px !important; }
         @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(185,28,28,0.6)} 70%{box-shadow:0 0 0 10px rgba(185,28,28,0)} 100%{box-shadow:0 0 0 0 rgba(185,28,28,0)} }
+        @keyframes speakGlow { 0%{box-shadow:0 0 0 0 rgba(21,128,61,0.5)} 70%{box-shadow:0 0 0 8px rgba(21,128,61,0)} 100%{box-shadow:0 0 0 0 rgba(21,128,61,0)} }
         .modal-overlay { display:flex; position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(5px); z-index:200; justify-content:center; align-items:center; }
         .pw-modal { background:var(--card); border-radius:12px; padding:30px; width:min(90vw,450px); position:relative; box-shadow:0 10px 30px rgba(0,0,0,0.2); max-height:90vh; overflow-y:auto; animation:pwIn .25s ease; }
         @keyframes pwIn { from{transform:scale(.94);opacity:0} to{transform:scale(1);opacity:1} }
@@ -509,6 +203,9 @@ export default function Chat() {
         .receipt-print .r-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #eee; font-size:14px; }
         .msg-read-aloud { display:inline-flex; background:none; border:none; cursor:pointer; font-size:13px; margin-left:8px; opacity:0.6; vertical-align:middle; }
         .msg-read-aloud:hover { opacity:1; }
+        .advisor-cta-wrap { margin-top:8px; }
+        .advisor-cta-btn { background:var(--primary-purple); color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+        .advisor-cta-btn:hover { opacity:0.9; }
 
         /* ══════════ ACCESSIBILITY (Module F) — mirrors Dashboard.jsx ══════════ */
         html[data-contrast="high"] {
@@ -564,6 +261,13 @@ export default function Chat() {
                 {m.type === 'ai' && (
                   <button type="button" className="msg-read-aloud" aria-label="Read this message aloud" onClick={() => speak(m.text)}>🔊</button>
                 )}
+                {m.type === 'ai' && m.advisorCta && (
+                  <div className="advisor-cta-wrap">
+                    <button type="button" className="advisor-cta-btn" onClick={openAdvisor}>
+                      💬 Talk to Fin, your Advisor
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
             {isLoading && <div className="message loading"><i className="fas fa-spinner fa-spin" /> Thinking...</div>}
@@ -580,9 +284,17 @@ export default function Chat() {
               disabled={isLoading}
               aria-label="Type your message to FinBud AI"
             />
-            <button className={`mic-btn ${isRecording ? 'recording' : ''}`} onClick={toggleRecording}
-              title="Voice Input" aria-label={isRecording ? 'Stop recording' : 'Start voice input'}>
-              <i className={`fas fa-${isRecording ? 'stop' : 'microphone'}`} />
+            <button
+              className={`mic-btn ${isVoiceModeActive ? voiceState : ''}`}
+              onClick={toggleVoiceMode}
+              title={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
+              aria-label={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
+            >
+              {voiceState === 'processing' && <i className="fas fa-spinner fa-spin" />}
+              {voiceState === 'speaking' && <i className="fas fa-volume-high" />}
+              {(voiceState === 'idle' || voiceState === 'listening') && (
+                <i className={`fas fa-microphone${isVoiceModeActive ? '' : ''}`} />
+              )}
             </button>
             <button className="send-btn" onClick={() => sendMessage()} disabled={isLoading} aria-label="Send message">Send</button>
           </div>

@@ -35,11 +35,12 @@ from psycopg2 import pool as psycopg2_pool
 from dotenv import load_dotenv
 load_dotenv()
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import secrets
 import sys
 import os
 import io
+import time
 import logging
 
 from features import (
@@ -253,6 +254,20 @@ def init_user_tables():
         "ALTER TABLE cards ADD COLUMN IF NOT EXISTS cardholder_name TEXT",
         "ALTER TABLE cards ADD COLUMN IF NOT EXISTS expiry TEXT",
         "ALTER TABLE cards ADD COLUMN IF NOT EXISTS nickname TEXT",
+        # ── Phone + OTP + CNIC + PIN signup flow ────────────────────────────
+        # email/password_hash stay as-is for existing EAM accounts; new
+        # phone-based accounts use cnic/pin_hash/status/otp_* instead.
+        "ALTER TABLE dashboard_users ALTER COLUMN email DROP NOT NULL",
+        "ALTER TABLE dashboard_users ALTER COLUMN password_hash DROP NOT NULL",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS cnic VARCHAR(15)",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS pin_hash TEXT",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_hash TEXT",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_attempts INTEGER DEFAULT 0",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_last_sent_at TIMESTAMP",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_requests_count INTEGER DEFAULT 0",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_requests_window_started_at TIMESTAMP",
     ]:
         try:
             c.execute(stmt); conn.commit()
@@ -317,6 +332,9 @@ def serve_react(path):
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
+    """Legacy email/password registration path — kept as-is so nothing
+    that still relies on it (e.g. EAM/admin-created accounts) breaks.
+    New end-user signups go through the phone/OTP/CNIC/PIN endpoints below."""
     try:
         data     = request.json
         name     = data.get('name')
@@ -340,8 +358,8 @@ def register():
         password_hash = generate_password_hash(password)
         c.execute("""
             INSERT INTO dashboard_users
-                (account_number, name, email, password_hash, phone, balance, points, created_at)
-            VALUES (%s, %s, %s, %s, %s, 50000, 100, %s)
+                (account_number, name, email, password_hash, phone, balance, points, created_at, status)
+            VALUES (%s, %s, %s, %s, %s, 50000, 100, %s, 'active')
             RETURNING id
         """, (account_number, name, email, password_hash, phone, datetime.utcnow().isoformat()))
 
@@ -364,11 +382,41 @@ def register():
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
+    """Accepts EITHER {email, password} (legacy accounts) OR
+    {phone, pin} (new phone/OTP/CNIC/PIN accounts, where phone IS the
+    account_number). Both paths land in the same session shape, so
+    every downstream route (Dashboard, Chat, features.py) is unaffected."""
     try:
-        data     = request.json
-        email    = data.get('email')
-        password = data.get('password')
+        data  = request.json or {}
+        email = data.get('email')
+        phone = data.get('phone')
 
+        if phone:
+            phone_digits = ''.join(ch for ch in phone if ch.isdigit())
+            pin = data.get('pin')
+            if not pin:
+                return jsonify({'success': False, 'message': 'Missing phone or PIN'}), 400
+
+            conn = get_db()
+            c    = conn.cursor()
+            c.execute(
+                "SELECT id, account_number, pin_hash, status FROM dashboard_users WHERE account_number=%s",
+                (phone_digits,)
+            )
+            user = c.fetchone()
+            release_db(conn)
+
+            if not user or not user['pin_hash'] or not check_password_hash(user['pin_hash'], pin):
+                return jsonify({'success': False, 'message': 'Invalid phone number or PIN'}), 401
+            if user['status'] != 'active':
+                return jsonify({'success': False, 'message': 'Account setup is incomplete. Please finish registration.'}), 403
+
+            session['user_id']        = user['id']
+            session['account_number'] = user['account_number']
+            return jsonify({'success': True, 'message': 'Login successful', 'account_number': user['account_number']})
+
+        # ── Legacy email/password path ──────────────────────────────────
+        password = data.get('password')
         if not all([email, password]):
             return jsonify({'success': False, 'message': 'Missing email or password'}), 400
 
@@ -381,7 +429,7 @@ def login():
         user = c.fetchone()
         release_db(conn)
 
-        if not user or not check_password_hash(user['password_hash'], password):
+        if not user or not user['password_hash'] or not check_password_hash(user['password_hash'], password):
             return jsonify({'success': False, 'message': 'Invalid email or password'}), 401
 
         session['user_id']        = user['id']
@@ -393,6 +441,340 @@ def login():
             'account_number': user['account_number']
         })
 
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ── Phone / OTP / CNIC / PIN signup flow ────────────────────────────────────
+# NOTE: There is no real telecom SMS gateway or NADRA/VeriSys access available
+# for this student project. Both external calls are mocked below, clearly
+# marked, and shaped so a real integration could later be dropped in without
+# changing the surrounding logic.
+
+OTP_TTL_MINUTES      = 5
+OTP_MAX_ATTEMPTS      = 5
+OTP_MAX_REQUESTS      = 5      # per phone number
+OTP_REQUEST_WINDOW_MIN = 60    # per this many minutes
+WEAK_PINS = {'00000', '11111', '22222', '33333', '44444', '55555',
+             '66666', '77777', '88888', '99999', '12345', '54321'}
+
+
+def _mock_send_otp(phone_digits, otp_code):
+    """MOCKED: a real implementation would call a telecom SMS gateway here
+    (e.g. Twilio, a local aggregator). For this student project we just
+    log it server-side and return it in the API response so the frontend
+    can display it in a clearly-labelled 'demo mode' banner."""
+    print(f"[MOCK SMS] OTP for {phone_digits}: {otp_code}")
+    return True
+
+
+def _mock_verify_cnic(cnic_digits):
+    """MOCKED: a real implementation would call NADRA VeriSys here to
+    confirm the CNIC is valid and matches the phone owner. We simulate a
+    network round-trip and accept any well-formed 13-digit CNIC."""
+    import time as _time
+    _time.sleep(0.8)  # simulate API latency so the UI feels real
+    if len(cnic_digits) != 13:
+        return {'verified': False}
+    return {'verified': True}
+
+
+@app.route('/api/auth/register/phone', methods=['POST'])
+def register_phone():
+    try:
+        data  = request.json or {}
+        phone = data.get('phone', '')
+        phone_digits = ''.join(ch for ch in phone if ch.isdigit())
+
+        if len(phone_digits) != 11:
+            return jsonify({'success': False, 'message': 'Enter a valid 11-digit phone number.'}), 400
+
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute("SELECT id, status, otp_requests_count, otp_requests_window_started_at "
+                   "FROM dashboard_users WHERE account_number=%s", (phone_digits,))
+        existing = c.fetchone()
+
+        if existing and existing['status'] == 'active':
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'An account with this phone number already exists. Please log in.'}), 400
+
+        # ── Rate limit OTP requests per phone number ────────────────────
+        now = datetime.utcnow()
+        if existing:
+            window_start = existing['otp_requests_window_started_at']
+            count = existing['otp_requests_count'] or 0
+            if window_start and (now - window_start).total_seconds() < OTP_REQUEST_WINDOW_MIN * 60:
+                if count >= OTP_MAX_REQUESTS:
+                    release_db(conn)
+                    return jsonify({'success': False, 'message': 'Too many OTP requests. Please try again later.'}), 429
+                new_count, new_window = count + 1, window_start
+            else:
+                new_count, new_window = 1, now
+        else:
+            new_count, new_window = 1, now
+
+        otp_code = f"{secrets.randbelow(1_000_000):06d}"
+        otp_hash = generate_password_hash(otp_code)
+        expires_at = now + timedelta(minutes=OTP_TTL_MINUTES)
+
+        if existing:
+            c.execute("""
+                UPDATE dashboard_users
+                SET otp_hash=%s, otp_expires_at=%s, otp_attempts=0, status='pending_otp',
+                    otp_last_sent_at=%s, otp_requests_count=%s, otp_requests_window_started_at=%s
+                WHERE account_number=%s
+            """, (otp_hash, expires_at, now, new_count, new_window, phone_digits))
+        else:
+            c.execute("""
+                INSERT INTO dashboard_users
+                    (account_number, name, phone, balance, points, created_at, status,
+                     otp_hash, otp_expires_at, otp_attempts, otp_last_sent_at,
+                     otp_requests_count, otp_requests_window_started_at)
+                VALUES (%s, '', %s, 0, 0, %s, 'pending_otp', %s, %s, 0, %s, %s, %s)
+            """, (phone_digits, phone_digits, now.isoformat(), otp_hash, expires_at,
+                  now, new_count, new_window))
+
+        conn.commit()
+        release_db(conn)
+
+        _mock_send_otp(phone_digits, otp_code)
+
+        return jsonify({
+            'success': True,
+            'message': 'OTP sent.',
+            # DEMO ONLY: no real SMS gateway is available for this project,
+            # so the OTP is returned here for the frontend to display.
+            'dev_otp': otp_code
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/auth/register/verify-otp', methods=['POST'])
+def register_verify_otp():
+    try:
+        data  = request.json or {}
+        phone_digits = ''.join(ch for ch in data.get('phone', '') if ch.isdigit())
+        otp   = data.get('otp', '')
+
+        if not phone_digits or not otp:
+            return jsonify({'success': False, 'message': 'Missing phone or OTP'}), 400
+
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute("SELECT otp_hash, otp_expires_at, otp_attempts, status "
+                   "FROM dashboard_users WHERE account_number=%s", (phone_digits,))
+        user = c.fetchone()
+
+        if not user or user['status'] != 'pending_otp' or not user['otp_hash']:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'No pending OTP for this number. Please request a new one.'}), 400
+
+        if user['otp_attempts'] >= OTP_MAX_ATTEMPTS:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Too many incorrect attempts. Please request a new OTP.'}), 429
+
+        if datetime.utcnow() > user['otp_expires_at']:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'OTP expired. Please request a new one.'}), 400
+
+        if not check_password_hash(user['otp_hash'], otp):
+            c.execute("UPDATE dashboard_users SET otp_attempts = otp_attempts + 1 WHERE account_number=%s",
+                       (phone_digits,))
+            conn.commit()
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Incorrect OTP.'}), 401
+
+        # Correct — consume the OTP so it can't be reused, advance status
+        c.execute("""
+            UPDATE dashboard_users
+            SET status='phone_verified', otp_hash=NULL, otp_expires_at=NULL, otp_attempts=0
+            WHERE account_number=%s
+        """, (phone_digits,))
+        conn.commit()
+        release_db(conn)
+
+        return jsonify({'success': True, 'message': 'Phone number verified.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/auth/register/cnic', methods=['POST'])
+def register_cnic():
+    try:
+        data  = request.json or {}
+        phone_digits = ''.join(ch for ch in data.get('phone', '') if ch.isdigit())
+        cnic_digits  = ''.join(ch for ch in data.get('cnic', '') if ch.isdigit())
+
+        if len(cnic_digits) != 13:
+            return jsonify({'success': False, 'message': 'Enter a valid 13-digit CNIC number.'}), 400
+
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute("SELECT status FROM dashboard_users WHERE account_number=%s", (phone_digits,))
+        user = c.fetchone()
+
+        if not user or user['status'] != 'phone_verified':
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Please verify your phone number first.'}), 400
+
+        c.execute("SELECT id FROM dashboard_users WHERE cnic=%s AND account_number != %s", (cnic_digits, phone_digits))
+        if c.fetchone():
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'This CNIC is already registered to another account.'}), 400
+
+        result = _mock_verify_cnic(cnic_digits)
+        if not result['verified']:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'CNIC could not be verified.'}), 400
+
+        c.execute("UPDATE dashboard_users SET cnic=%s, status='cnic_verified' WHERE account_number=%s",
+                   (cnic_digits, phone_digits))
+        conn.commit()
+        release_db(conn)
+
+        return jsonify({'success': True, 'message': 'CNIC verified.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/auth/register/complete', methods=['POST'])
+def register_complete():
+    try:
+        data  = request.json or {}
+        phone_digits = ''.join(ch for ch in data.get('phone', '') if ch.isdigit())
+        display_name = (data.get('displayName') or '').strip()
+        pin = data.get('pin', '')
+
+        if not display_name:
+            return jsonify({'success': False, 'message': 'Please enter a display name.'}), 400
+        if not (pin.isdigit() and len(pin) == 5):
+            return jsonify({'success': False, 'message': 'PIN must be exactly 5 digits.'}), 400
+        if pin in WEAK_PINS:
+            return jsonify({'success': False, 'message': 'That PIN is too easy to guess. Please choose another.'}), 400
+
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute("SELECT id, status FROM dashboard_users WHERE account_number=%s", (phone_digits,))
+        user = c.fetchone()
+
+        if not user or user['status'] != 'cnic_verified':
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Please complete phone and CNIC verification first.'}), 400
+
+        pin_hash = generate_password_hash(pin)
+        c.execute("""
+            UPDATE dashboard_users
+            SET name=%s, pin_hash=%s, status='active', balance=50000, points=100
+            WHERE account_number=%s
+        """, (display_name, pin_hash, phone_digits))
+        conn.commit()
+        release_db(conn)
+
+        session['user_id']        = user['id']
+        session['account_number'] = phone_digits
+
+        return jsonify({'success': True, 'message': 'Account created.', 'account_number': phone_digits})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/auth/forgot-pin/request', methods=['POST'])
+def forgot_pin_request():
+    """Sends a mock OTP to reset the PIN for an existing active account.
+    Reuses the same otp_* columns/rate-limit as signup, but never touches
+    `status` — the account stays active throughout."""
+    try:
+        data  = request.json or {}
+        phone_digits = ''.join(ch for ch in data.get('phone', '') if ch.isdigit())
+        if len(phone_digits) != 11:
+            return jsonify({'success': False, 'message': 'Enter a valid 11-digit phone number.'}), 400
+
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute("SELECT status, otp_requests_count, otp_requests_window_started_at "
+                   "FROM dashboard_users WHERE account_number=%s", (phone_digits,))
+        user = c.fetchone()
+
+        if not user or user['status'] != 'active' or not user['status']:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'No account found for this phone number.'}), 404
+
+        now = datetime.utcnow()
+        window_start = user['otp_requests_window_started_at']
+        count = user['otp_requests_count'] or 0
+        if window_start and (now - window_start).total_seconds() < OTP_REQUEST_WINDOW_MIN * 60:
+            if count >= OTP_MAX_REQUESTS:
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'Too many OTP requests. Please try again later.'}), 429
+            new_count, new_window = count + 1, window_start
+        else:
+            new_count, new_window = 1, now
+
+        otp_code = f"{secrets.randbelow(1_000_000):06d}"
+        otp_hash = generate_password_hash(otp_code)
+        expires_at = now + timedelta(minutes=OTP_TTL_MINUTES)
+
+        c.execute("""
+            UPDATE dashboard_users
+            SET otp_hash=%s, otp_expires_at=%s, otp_attempts=0,
+                otp_last_sent_at=%s, otp_requests_count=%s, otp_requests_window_started_at=%s
+            WHERE account_number=%s
+        """, (otp_hash, expires_at, now, new_count, new_window, phone_digits))
+        conn.commit()
+        release_db(conn)
+
+        _mock_send_otp(phone_digits, otp_code)
+        return jsonify({'success': True, 'message': 'OTP sent.', 'dev_otp': otp_code})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/auth/forgot-pin/reset', methods=['POST'])
+def forgot_pin_reset():
+    try:
+        data  = request.json or {}
+        phone_digits = ''.join(ch for ch in data.get('phone', '') if ch.isdigit())
+        otp = data.get('otp', '')
+        new_pin = data.get('newPin', '')
+
+        if not (new_pin.isdigit() and len(new_pin) == 5):
+            return jsonify({'success': False, 'message': 'PIN must be exactly 5 digits.'}), 400
+        if new_pin in WEAK_PINS:
+            return jsonify({'success': False, 'message': 'That PIN is too easy to guess. Please choose another.'}), 400
+
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute("SELECT status, otp_hash, otp_expires_at, otp_attempts "
+                   "FROM dashboard_users WHERE account_number=%s", (phone_digits,))
+        user = c.fetchone()
+
+        if not user or user['status'] != 'active' or not user['otp_hash']:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'No pending reset for this number. Please request a new OTP.'}), 400
+        if user['otp_attempts'] >= OTP_MAX_ATTEMPTS:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Too many incorrect attempts. Please request a new OTP.'}), 429
+        if datetime.utcnow() > user['otp_expires_at']:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'OTP expired. Please request a new one.'}), 400
+        if not check_password_hash(user['otp_hash'], otp):
+            c.execute("UPDATE dashboard_users SET otp_attempts = otp_attempts + 1 WHERE account_number=%s", (phone_digits,))
+            conn.commit()
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Incorrect OTP.'}), 401
+
+        new_hash = generate_password_hash(new_pin)
+        c.execute("""
+            UPDATE dashboard_users
+            SET pin_hash=%s, otp_hash=NULL, otp_expires_at=NULL, otp_attempts=0
+            WHERE account_number=%s
+        """, (new_hash, phone_digits))
+        conn.commit()
+        release_db(conn)
+
+        return jsonify({'success': True, 'message': 'PIN reset successful.'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -433,28 +815,12 @@ def chat_message():
             except Exception:
                 financial_summary = {}
 
-            experience_level = None
-            risk_preference = None
-            try:
-                _prof_conn = get_pg_conn(); _prof_c = _prof_conn.cursor()
-                _prof_c.execute(
-                    "SELECT experience_level, risk_preference FROM advisor_profiles WHERE account_number=%s",
-                    (account_number,)
-                )
-                _prof_row = _prof_c.fetchone()
-                release_pg_conn(_prof_conn)
-                if _prof_row:
-                    experience_level = _prof_row['experience_level']
-                    risk_preference = _prof_row['risk_preference']
-            except Exception:
-                pass  # profile lookup is best-effort — chat still works without it
-
             user_context = {
                 'income': financial_summary.get('income'),
                 'expenses': financial_summary.get('expenses'),
                 'net': financial_summary.get('net'),
-                'experience_level': experience_level,
-                'risk_preference': risk_preference,
+                'experience_level': session.get('advisor_experience_level'),
+                'risk_preference': session.get('advisor_risk_preference'),
             }
             ai_response = handle_advisor_chat(user_message, user_context)
             return jsonify({
@@ -631,9 +997,12 @@ def chat_message():
             session_reset = False
 
             if original_intent == 'transfer_money':
-                amount            = entities.get('amount')
-                recipient         = entities.get('recipient')
-                recipient_account = entities.get('account_number')
+                amount              = entities.get('amount')
+                recipient           = entities.get('recipient')
+                transfer_method     = entities.get('transfer_method')
+                recipient_account   = entities.get('transfer_identifier')
+                purpose             = entities.get('purpose')
+                description         = entities.get('description')
 
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
@@ -649,10 +1018,10 @@ def chat_message():
                     )
                     c.execute("""
                         INSERT INTO dashboard_transactions
-                            (account_number, transaction_type, description, amount, recipient, status, created_at)
-                        VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s)
-                    """, (account_number, f"Transfer to {recipient}", -amount,
-                          recipient_account, datetime.utcnow().isoformat()))
+                            (account_number, transaction_type, description, amount, recipient, status, created_at, category)
+                        VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, %s)
+                    """, (account_number, f"Transfer to {recipient} ({transfer_method}, {purpose})", -amount,
+                          recipient_account, datetime.utcnow().isoformat(), description))
                     conn.commit()
 
                     ai_response = chatbot.responses['transfer_success'][language].format(
@@ -663,18 +1032,21 @@ def chat_message():
                     session_reset = True
 
             elif original_intent == 'pay_bill':
-                bill_type    = entities.get('bill_type')
-                amount       = entities.get('amount')
-                bill_account = entities.get('account_number')
+                bill_type        = entities.get('bill_category')
+                amount            = entities.get('amount')
+                service_provider  = entities.get('service_provider')
+                bill_account      = entities.get('bill_reference')
 
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
                     session['conversation_context'] = {
                         'current_flow':             'pay_bill',
-                        'bill_type':                bill_type,
+                        'bill_category':            bill_type,
+                        'service_provider':         service_provider,
                         'amount':                   amount,
-                        'account_number':           bill_account,
-                        'insufficient_funds_retry': True
+                        'bill_reference':           bill_account,
+                        'insufficient_funds_retry': True,
+                        'session_language':         language
                     }
                 else:
                     points_earned = int(amount // 1000) * 5
@@ -691,7 +1063,7 @@ def chat_message():
                              biller, bill_id, status, created_at)
                         VALUES (%s, 'bill', %s, %s, %s, %s, 'completed', %s)
                     """, (account_number, f"{bill_type} Bill Payment", -amount,
-                          bill_type, bill_account, datetime.utcnow().isoformat()))
+                          service_provider, bill_account, datetime.utcnow().isoformat()))
                     conn.commit()
 
                     ai_response = chatbot.responses['bill_payment_success'][language].format(
@@ -758,20 +1130,26 @@ def chat_message():
         if nlp_result.get('awaiting_emergency_password'):
             session['conversation_context'] = {
                 'awaiting_emergency_password': True,
-                'emergency_attempts': nlp_result.get('emergency_attempts', 3)
+                'emergency_attempts': nlp_result.get('emergency_attempts', 3),
+                'session_language': nlp_result.get('session_language')
             }
         elif nlp_result.get('awaiting_password'):
             session['conversation_context'] = {
                 'awaiting_password': True,
                 'original_intent':  nlp_result.get('original_intent'),
-                'pending_entities': nlp_result.get('pending_entities', {})
+                'pending_entities': nlp_result.get('pending_entities', {}),
+                'session_language': nlp_result.get('session_language')
             }
         elif nlp_result.get('current_flow'):
             context = {'current_flow': nlp_result['current_flow']}
             for key in ['amount', 'recipient', 'bill_type', 'bill_reference',
-                        'redemption_choice', 'account_number', 'flow_state']:
+                        'redemption_choice', 'account_number', 'flow_state',
+                        'transfer_method', 'transfer_identifier', 'purpose',
+                        'description', 'bill_category', 'service_provider',
+                        'provider_hint']:
                 if key in nlp_result:
                     context[key] = nlp_result[key]
+            context['session_language'] = nlp_result.get('session_language')
             session['conversation_context'] = context
         else:
             session['conversation_context'] = {}
@@ -1064,7 +1442,7 @@ def get_user_data():
         conn = get_db()
         c    = conn.cursor()
         c.execute("""
-            SELECT account_number, name, email, phone, balance, points
+            SELECT account_number, name, phone, balance, points
             FROM dashboard_users WHERE account_number=%s
         """, (account_number,))
         user = c.fetchone()
@@ -1078,7 +1456,6 @@ def get_user_data():
 
         return jsonify({
             'name':    user['name'],
-            'email':   user['email'],
             'userId':  user['account_number'],
             'balance': float(user['balance']),
             'points':  user['points'],
@@ -1105,14 +1482,19 @@ def verify_password():
         user_id = session['user_id']
         conn    = get_db()
         c       = conn.cursor()
-        c.execute("SELECT password_hash FROM dashboard_users WHERE id=%s", (user_id,))
+        c.execute("SELECT password_hash, pin_hash FROM dashboard_users WHERE id=%s", (user_id,))
         user = c.fetchone()
         release_db(conn)
 
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
-        if check_password_hash(user['password_hash'], password):
+        # Phone/PIN accounts have pin_hash set and no password_hash; legacy
+        # email accounts have password_hash and no pin_hash. Whichever one
+        # this user has is what we check the submitted value against — the
+        # frontend keeps sending it in the same `password` field either way.
+        stored_hash = user['pin_hash'] or user['password_hash']
+        if stored_hash and check_password_hash(stored_hash, password):
             return jsonify({'success': True})
         else:
             return jsonify({'success': False, 'message': 'Incorrect password'}), 401
@@ -1134,21 +1516,39 @@ def change_password():
         if not all([current_password, new_password]):
             return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-        if len(new_password) < 4:
-            return jsonify({'success': False, 'message': 'New password must be at least 4 characters'}), 400
-
         user_id = session['user_id']
         conn    = get_db()
         c       = conn.cursor()
-        c.execute("SELECT password_hash FROM dashboard_users WHERE id=%s", (user_id,))
+        c.execute("SELECT password_hash, pin_hash FROM dashboard_users WHERE id=%s", (user_id,))
         user = c.fetchone()
 
-        if not user or not check_password_hash(user['password_hash'], current_password):
+        if not user:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+
+        is_pin_account = user['pin_hash'] is not None
+        stored_hash = user['pin_hash'] or user['password_hash']
+
+        if not stored_hash or not check_password_hash(stored_hash, current_password):
             release_db(conn)
             return jsonify({'success': False, 'message': 'Current password is incorrect'}), 401
 
-        new_hash = generate_password_hash(new_password)
-        c.execute("UPDATE dashboard_users SET password_hash=%s WHERE id=%s", (new_hash, user_id))
+        if is_pin_account:
+            if not (new_password.isdigit() and len(new_password) == 5):
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'New PIN must be exactly 5 digits'}), 400
+            if new_password in WEAK_PINS:
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'That PIN is too easy to guess. Please choose another.'}), 400
+            new_hash = generate_password_hash(new_password)
+            c.execute("UPDATE dashboard_users SET pin_hash=%s WHERE id=%s", (new_hash, user_id))
+        else:
+            if len(new_password) < 4:
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'New password must be at least 4 characters'}), 400
+            new_hash = generate_password_hash(new_password)
+            c.execute("UPDATE dashboard_users SET password_hash=%s WHERE id=%s", (new_hash, user_id))
+
         conn.commit()
         release_db(conn)
 
@@ -1204,6 +1604,322 @@ def _calc_transfer_fee(amount, is_finbud_user):
     if is_finbud_user:
         return 0.0
     return 25.0 if amount < 10000 else round(amount * 0.0015, 2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SEND MONEY PIPELINE  (first_modal.pdf: Modal 1 method selection → Modal 2
+# recipient details → Modal 3 amount → Modal 4 summary → Modal 5 PIN →
+# Modal 6 success)
+#
+# These two endpoints power the multi-step Send Money modal only. They are
+# additive — /api/transaction/create above is untouched and keeps serving
+# whatever else already calls it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _validate_iban(value):
+    """
+    Pakistani IBAN: 'PK' + 2 numeric check digits + 4-letter SBP bank code
+    + 16 digits = 24 characters total (e.g. PK36SCBL0000001123456702).
+    IBAN and a plain account number are NOT interchangeable — this only
+    accepts the IBAN shape.
+    """
+    if not value or len(value) != 24:
+        return False
+    v = value.upper()
+    return v[:2] == 'PK' and v[2:4].isdigit() and v[4:8].isalpha() and v[8:].isdigit()
+
+
+def _validate_account_number(value):
+    """
+    Plain bank account number: digits only. Length varies by bank in real
+    life, so we accept a broad 8-16 digit range rather than a fixed length
+    (unlike IBAN, which is always exactly 24 characters).
+    """
+    return bool(value) and value.isdigit() and 8 <= len(value) <= 16
+
+
+@app.route('/api/transfer/finbud/lookup', methods=['GET'])
+def lookup_finbud_recipient():
+    """
+    Modal 2 support: verify a FinBud recipient by phone number so the UI can
+    show "Transferring to {name}" before the user enters an amount.
+    Query param: ?phone=03001234567
+    Reply (found):     { success: true,  name, account_number }
+    Reply (not found): { success: false, message } , HTTP 404
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    phone = request.args.get('phone', '').strip()
+    if not phone:
+        return jsonify({'success': False, 'message': 'phone query param is required'}), 400
+
+    try:
+        conn = get_db(); c = conn.cursor()
+        # Phone/PIN accounts use the phone number itself as account_number,
+        # so match on either column to be safe.
+        c.execute("""
+            SELECT account_number, name FROM dashboard_users
+            WHERE phone=%s OR account_number=%s
+            LIMIT 1
+        """, (phone, phone))
+        recipient = c.fetchone()
+        release_db(conn)
+
+        if not recipient:
+            return jsonify({
+                'success': False,
+                'message': 'No FinBud account exists for that phone number.'
+            }), 404
+
+        if recipient['account_number'] == session.get('account_number'):
+            return jsonify({'success': False, 'message': "You can't send money to yourself."}), 400
+
+        return jsonify({
+            'success':        True,
+            'name':           recipient['name'],
+            'account_number': recipient['account_number']
+        })
+
+    except Exception as e:
+        print(f"[lookup_finbud_recipient] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/transfer/execute', methods=['POST'])
+def execute_transfer():
+    """
+    Single atomic endpoint behind Modal 3's "Confirm" → Modal 4 PIN entry.
+    Handles both legs described in first_modal.pdf:
+
+      • FinBud → FinBud : re-verifies the recipient server-side (never trusts
+        the name the client already displayed), credits their balance, and
+        logs a transaction + notification for BOTH sides. Fee: PKR 0.
+      • FinBud → Bank    : mocked 1LINK transfer — validates the IBAN/account
+        number is exactly 24 characters, applies the flat/percentage fee,
+        and logs a transaction + transfer_fees row for the sender only.
+
+    Body: {
+      method: 'finbud' | 'bank',
+      recipient_phone,        # required when method == 'finbud'
+      bank_name,               # required when method == 'bank'
+      identifier_type,         # 'iban' | 'account_number' — required when method == 'bank'
+      account_id,               # the IBAN or account number itself
+      amount, pin              # pin is the 5-digit PIN from Modal 5
+    }
+    Reply: { success, transaction_id, new_balance, fee, recipient_name, ... }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    data   = request.json or {}
+    method = data.get('method')
+
+    if method not in ('finbud', 'bank'):
+        return jsonify({'success': False, 'message': "method must be 'finbud' or 'bank'"}), 400
+
+    try:
+        amount = float(data.get('amount', 0))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'Invalid amount'}), 400
+    if amount <= 0:
+        return jsonify({'success': False, 'message': 'Please enter a valid positive amount.'}), 400
+
+    # ── PIN format + strength check (Modal 4) ────────────────────────────────
+    pin = str(data.get('pin', '')).strip()
+    if len(pin) != 5 or not pin.isdigit():
+        return jsonify({'success': False, 'message': 'PIN must be exactly 5 digits.'}), 400
+    if pin in WEAK_PINS:
+        return jsonify({'success': False, 'message': 'That PIN is too weak. Please set a different one.'}), 400
+
+    account_number = session['account_number']
+    conn = get_db(); c = conn.cursor()
+
+    try:
+        c.execute(
+            "SELECT name, pin_hash, password_hash, balance, points "
+            "FROM dashboard_users WHERE account_number=%s",
+            (account_number,)
+        )
+        sender = c.fetchone()
+        if not sender:
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+
+        # PIN verification against pin_hash (falls back to password_hash for
+        # legacy email/password accounts that never set a PIN).
+        stored_hash = sender['pin_hash'] or sender['password_hash']
+        if not stored_hash or not check_password_hash(stored_hash, pin):
+            release_db(conn)
+            return jsonify({'success': False, 'message': 'Incorrect PIN. Please try again.'}), 401
+
+        sender_balance = float(sender['balance'])
+        sender_points  = int(sender['points'])
+
+        recipient_account = None
+        recipient_name    = None
+        account_id         = None
+        fee = 0.0
+
+        if method == 'finbud':
+            phone = str(data.get('recipient_phone', '')).strip()
+            if not phone:
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'Recipient phone number is required.'}), 400
+
+            c.execute("""
+                SELECT account_number, name FROM dashboard_users
+                WHERE phone=%s OR account_number=%s LIMIT 1
+            """, (phone, phone))
+            recipient = c.fetchone()
+            if not recipient:
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'No FinBud account exists for that phone number.'}), 404
+            if recipient['account_number'] == account_number:
+                release_db(conn)
+                return jsonify({'success': False, 'message': "You can't send money to yourself."}), 400
+
+            recipient_account = recipient['account_number']
+            recipient_name    = recipient['name']
+            fee = 0.0  # FinBud → FinBud is always free
+
+        else:  # bank
+            bank_name       = str(data.get('bank_name', '')).strip()
+            identifier_type = str(data.get('identifier_type', 'iban')).strip().lower()
+            raw_id          = str(data.get('account_id', '')).strip()
+
+            if not bank_name:
+                release_db(conn)
+                return jsonify({'success': False, 'message': 'Bank name is required.'}), 400
+
+            if identifier_type == 'iban':
+                account_id = raw_id.upper().replace(' ', '')
+                if not _validate_iban(account_id):
+                    release_db(conn)
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid IBAN. It must start with PK and be exactly 24 characters (e.g. PK36SCBL0000001123456702).'
+                    }), 400
+            elif identifier_type == 'account_number':
+                account_id = raw_id.replace(' ', '')
+                if not _validate_account_number(account_id):
+                    release_db(conn)
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid account number. It must be 8–16 digits, numbers only.'
+                    }), 400
+            else:
+                release_db(conn)
+                return jsonify({'success': False, 'message': "identifier_type must be 'iban' or 'account_number'."}), 400
+
+            fee = _calc_transfer_fee(amount, is_finbud_user=False)
+            recipient_name = bank_name  # no FinBud DB record to verify against
+
+        total_deducted = round(amount + fee, 2)
+        if sender_balance < total_deducted:
+            release_db(conn)
+            return jsonify({
+                'success': False,
+                'message': f'Insufficient funds. Amount: PKR {amount:,.0f} + Fee: PKR {fee:,.0f} = PKR {total_deducted:,.0f}'
+            }), 400
+
+        now_iso       = datetime.utcnow().isoformat()
+        points_earned = int(amount // 1000) * 5
+
+        # Mock a brief 1LINK network round-trip for bank transfers so the
+        # frontend's spinner (Modal 4 → Modal 5) has something real to show.
+        if method == 'bank':
+            time.sleep(0.6)
+
+        description = (
+            f"Transfer to {recipient_name}" if method == 'finbud'
+            else f"Bank transfer to {recipient_name} ({'IBAN' if identifier_type == 'iban' else 'A/C'}: {account_id})"
+        )
+        if fee > 0:
+            description += f" (Fee: PKR {fee:,.0f})"
+
+        # ── Sender-side ledger entry (both methods) ──────────────────────────
+        c.execute("""
+            INSERT INTO dashboard_transactions
+                (account_number, transaction_type, description, amount,
+                 recipient, status, created_at, category, fee)
+            VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, 'Transfer', %s)
+            RETURNING id
+        """, (account_number, description, -total_deducted,
+              recipient_account or recipient_name, now_iso, fee))
+        transaction_id = c.fetchone()['id']
+
+        fee_percentage = (fee / amount) if amount else 0.0
+        c.execute("""
+            INSERT INTO transfer_fees
+                (transaction_id, account_number, transfer_amount, fee_amount, fee_percentage, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (transaction_id, account_number, amount, fee, fee_percentage, now_iso))
+
+        new_sender_balance = sender_balance - total_deducted
+        new_sender_points  = sender_points + points_earned
+        c.execute(
+            "UPDATE dashboard_users SET balance=%s, points=%s WHERE account_number=%s",
+            (new_sender_balance, new_sender_points, account_number)
+        )
+
+        c.execute("""
+            INSERT INTO notifications(account_number, message, notif_type, is_read, created_at)
+            VALUES (%s, %s, 'transaction', FALSE, %s)
+        """, (
+            account_number,
+            f"PKR {amount:,.0f} sent to {recipient_name}. Remaining balance: PKR {new_sender_balance:,.0f}.",
+            now_iso
+        ))
+
+        # ── Recipient-side ledger entry (FinBud → FinBud only) ───────────────
+        if method == 'finbud':
+            c.execute("""
+                INSERT INTO dashboard_transactions
+                    (account_number, transaction_type, description, amount,
+                     recipient, status, created_at, category, fee)
+                VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, 'Transfer', 0)
+            """, (
+                recipient_account,
+                f"Received from {sender['name']}",
+                amount, account_number, now_iso
+            ))
+
+            c.execute(
+                "UPDATE dashboard_users SET balance = balance + %s WHERE account_number=%s",
+                (amount, recipient_account)
+            )
+
+            c.execute("""
+                INSERT INTO notifications(account_number, message, notif_type, is_read, created_at)
+                VALUES (%s, %s, 'transaction', FALSE, %s)
+            """, (
+                recipient_account,
+                f"PKR {amount:,.0f} received from {sender['name']}.",
+                now_iso
+            ))
+
+        conn.commit()
+        release_db(conn)
+
+        return jsonify({
+            'success':        True,
+            'transaction_id': transaction_id,
+            'new_balance':    float(new_sender_balance),
+            'new_points':     new_sender_points,
+            'points_earned':  points_earned,
+            'fee':            fee,
+            'fee_applied':    fee > 0,
+            'recipient_name': recipient_name,
+            'method':         method,
+            'identifier_type': identifier_type if method == 'bank' else None
+        })
+
+    except Exception as e:
+        conn.rollback()
+        release_db(conn)
+        print(f"[execute_transfer] error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @app.route('/api/transaction/create', methods=['POST'])

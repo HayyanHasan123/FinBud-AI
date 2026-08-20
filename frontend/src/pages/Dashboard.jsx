@@ -115,9 +115,172 @@ function getTransactionDisplayLabel(tx) {
   return tx?.description || ''
 }
 
+// ── TRANSLATIONS (English / Urdu / Roman Urdu) ────────────────────────
+// Covers the primary user-facing surfaces: navigation, Home, Analytics,
+// Wallet, and the core action modals (Send Money, Pay Bill, Rewards,
+// Redeem Points, Top Up). Keys are looked up via t(key) inside Dashboard().
+// User-typed input, transaction descriptions, and numeric/currency values
+// are never translated — only static interface text.
+const TRANSLATIONS = {
+  // Nav / topbar / sidebar
+  nav_home: { en: 'Home', ur: 'ہوم', roman: 'Home' },
+  nav_analytics: { en: 'Analytics', ur: 'تجزیات', roman: 'Analytics' },
+  nav_advisor: { en: 'Advisor', ur: 'مشیر', roman: 'Advisor' },
+  nav_wallet: { en: 'Wallet', ur: 'بٹوہ', roman: 'Wallet' },
+  nav_your_analytics: { en: 'Your Analytics', ur: 'آپ کے تجزیات', roman: 'Aap Ke Analytics' },
+  nav_financial_advisor: { en: 'Financial Advisor', ur: 'مالی مشیر', roman: 'Financial Advisor' },
+  topbar_dashboard: { en: 'Dashboard', ur: 'ڈیش بورڈ', roman: 'Dashboard' },
+  sidebar_profile: { en: 'Profile Overview', ur: 'پروفائل کا جائزہ', roman: 'Profile Overview' },
+  sidebar_settings: { en: 'Settings', ur: 'ترتیبات', roman: 'Settings' },
+  sidebar_security: { en: 'Security Center', ur: 'سیکیورٹی سینٹر', roman: 'Security Center' },
+  sidebar_reports: { en: 'Financial Reports', ur: 'مالی رپورٹس', roman: 'Financial Reports' },
+  sidebar_logout: { en: 'LOG OUT', ur: 'لاگ آؤٹ', roman: 'Log Out' },
+  sidebar_switch_profile: { en: 'Switch Profile', ur: 'پروفائل تبدیل کریں', roman: 'Profile Switch Karein' },
+  sidebar_user_id: { en: 'User ID', ur: 'یوزر آئی ڈی', roman: 'User ID' },
+  text_size: { en: 'Text Size', ur: 'تحریر کا سائز', roman: 'Text Size' },
+  language: { en: 'Language', ur: 'زبان', roman: 'Zaban' },
+
+  // Home
+  home_hello: { en: 'Hello', ur: 'ہیلو', roman: 'Hello' },
+  home_your_balance: { en: 'YOUR BALANCE:', ur: 'آپ کا بیلنس:', roman: 'Aap Ka Balance:' },
+  home_show_balance: { en: 'SHOW BALANCE', ur: 'بیلنس دکھائیں', roman: 'Balance Dikhayein' },
+  home_hide_balance: { en: 'HIDE BALANCE', ur: 'بیلنس چھپائیں', roman: 'Balance Chupayein' },
+  home_topup: { en: '+ Top Up', ur: '+ ٹاپ اپ', roman: '+ Top Up' },
+  action_send_money: { en: 'SEND MONEY', ur: 'رقم بھیجیں', roman: 'Paise Bhejein' },
+  action_pay_bill: { en: 'PAY BILL', ur: 'بل ادا کریں', roman: 'Bill Pay Karein' },
+  action_rewards: { en: 'REWARDS', ur: 'انعامات', roman: 'Rewards' },
+  action_redeem_points: { en: 'REDEEM POINTS', ur: 'پوائنٹس ریڈیم کریں', roman: 'Points Redeem Karein' },
+  chat_line1: { en: 'Chat With', ur: 'بات چیت کریں', roman: 'Chat Karein' },
+  chat_line2: { en: 'Your AI Assistant', ur: 'اپنے اے آئی اسسٹنٹ سے', roman: 'Apne AI Assistant Se' },
+  tx_recent: { en: 'Recent Transactions', ur: 'حالیہ لین دین', roman: 'Recent Transactions' },
+  tx_date: { en: 'Date', ur: 'تاریخ', roman: 'Tareekh' },
+  tx_type: { en: 'Type', ur: 'قسم', roman: 'Type' },
+  tx_amount: { en: 'Amount', ur: 'رقم', roman: 'Raqam' },
+  tx_empty: { en: 'No transactions yet', ur: 'ابھی تک کوئی لین دین نہیں', roman: 'Abhi Tak Koi Transaction Nahi' },
+  tx_download_receipt: { en: 'Download Receipt', ur: 'رسید ڈاؤن لوڈ کریں', roman: 'Receipt Download Karein' },
+  bell_bill_reminders: { en: 'Bill Reminders', ur: 'بل کی یاد دہانی', roman: 'Bill Reminders' },
+  bell_no_bills: { en: 'No bills due', ur: 'کوئی بل واجب الادا نہیں', roman: 'Koi Bill Due Nahi' },
+  bell_activity: { en: 'Transaction Activity', ur: 'لین دین کی سرگرمی', roman: 'Transaction Activity' },
+  bell_no_activity: { en: 'No activity yet', ur: 'ابھی تک کوئی سرگرمی نہیں', roman: 'Abhi Tak Koi Activity Nahi' },
+
+  // Analytics (FinancialAdvisorView)
+  analytics_title: { en: 'Your Analytics', ur: 'آپ کے تجزیات', roman: 'Aap Ke Analytics' },
+  analytics_subtitle: { en: 'Your income, spending, and money habits — all in one place.', ur: 'آپ کی آمدنی، اخراجات اور پیسوں کی عادات — سب ایک جگہ۔', roman: 'Aap Ki Income, Kharch, Aur Paison Ki Aadatein — Sab Aik Jagah.' },
+  analytics_log_income: { en: '+ Log Income', ur: '+ آمدنی درج کریں', roman: '+ Income Likhein' },
+  analytics_this_month: { en: 'This Month', ur: 'اس مہینے', roman: 'Is Mahine' },
+  read_aloud: { en: '🔊 Read Aloud', ur: '🔊 پڑھ کر سنائیں', roman: '🔊 Parh Kar Sunayein' },
+  analytics_income: { en: 'Income', ur: 'آمدنی', roman: 'Income' },
+  analytics_expenses: { en: 'Expenses', ur: 'اخراجات', roman: 'Kharch' },
+  analytics_net: { en: 'Net', ur: 'خالص', roman: 'Net' },
+  analytics_safe_to_spend: { en: 'Safe to Spend', ur: 'خرچ کرنے کے لیے محفوظ رقم', roman: 'Safe To Spend' },
+  analytics_suggested_savings: { en: 'Suggested Savings (20%)', ur: 'تجویز کردہ بچت (20%)', roman: 'Tajweez Kardah Bachat (20%)' },
+  analytics_suggested_investment: { en: 'Suggested Investment (10%)', ur: 'تجویز کردہ سرمایہ کاری (10%)', roman: 'Tajweez Kardah Sarmaya Kari (10%)' },
+  analytics_summary_empty: { en: "Income vs. expense tracking is coming online soon — this card will populate automatically once it's connected on the backend.", ur: 'آمدنی اور اخراجات کی ٹریکنگ جلد شروع ہو رہی ہے — بیک اینڈ سے منسلک ہوتے ہی یہ کارڈ خود بخود بھر جائے گا۔', roman: 'Income Vs Expense Tracking Jald Shuru Ho Rahi Hai — Yeh Card Backend Se Connect Hote Hi Khud Bhar Jayega.' },
+  analytics_credit_score: { en: 'Credit Score', ur: 'کریڈٹ سکور', roman: 'Credit Score' },
+  analytics_late_payments: { en: 'Late Payments', ur: 'تاخیر سے ادائیگیاں', roman: 'Late Payments' },
+  analytics_monthly_trend: { en: 'Monthly Trend', ur: 'ماہانہ رجحان', roman: 'Monthly Trend' },
+  analytics_trend_empty: { en: "Once a few months of data are in, you'll see your income vs. expense trend here.", ur: 'چند مہینوں کا ڈیٹا آنے کے بعد یہاں آپ کی آمدنی اور اخراجات کا رجحان نظر آئے گا۔', roman: 'Chand Mahino Ka Data Aane Ke Baad Yahan Aap Ka Income Vs Expense Trend Nazar Aayega.' },
+  analytics_spending_pace: { en: 'Spending Pace', ur: 'خرچ کرنے کی رفتار', roman: 'Kharch Ki Raftaar' },
+  analytics_pace_empty: { en: "Once last month is complete, this will compare how fast you're spending this month against last month's total.", ur: 'پچھلا مہینہ مکمل ہونے کے بعد، یہ موازنہ کرے گا کہ آپ اس مہینے کتنی تیزی سے خرچ کر رہے ہیں۔', roman: 'Pichla Mahina Mukammal Hone Ke Baad, Yeh Compare Karega Ke Aap Is Mahine Kitni Tezi Se Kharch Kar Rahe Hain.' },
+  analytics_income_sources: { en: 'Income Sources', ur: 'آمدنی کے ذرائع', roman: 'Income Ke Zarayeh' },
+  analytics_income_empty: { en: 'No income logged yet — tap "+ Log Income" to add your first entry.', ur: 'ابھی تک کوئی آمدنی درج نہیں — پہلی اندراج کے لیے "+ آمدنی درج کریں" پر ٹیپ کریں۔', roman: 'Abhi Tak Koi Income Likhi Nahi — Pehli Entry Ke Liye "+ Income Likhein" Par Tap Karein.' },
+  analytics_spending_breakdown: { en: 'Spending Breakdown', ur: 'اخراجات کی تفصیل', roman: 'Kharch Ki Tafseel' },
+  analytics_breakdown_empty: { en: 'No spending yet — make a transfer or pay a bill to see your breakdown.', ur: 'ابھی تک کوئی خرچ نہیں — تفصیل دیکھنے کے لیے رقم بھیجیں یا بل ادا کریں۔', roman: 'Abhi Tak Koi Kharch Nahi — Tafseel Dekhne Ke Liye Paise Bhejein Ya Bill Pay Karein.' },
+  analytics_show_more: { en: 'Show More Insights (Subscriptions)', ur: 'مزید معلومات دکھائیں (سبسکرپشنز)', roman: 'Mazeed Maloomat Dikhayein (Subscriptions)' },
+  analytics_subscriptions: { en: 'Subscriptions & Recurring', ur: 'سبسکرپشنز اور بار بار ادائیگیاں', roman: 'Subscriptions Aur Recurring' },
+  analytics_preview: { en: 'Preview', ur: 'پیش منظر', roman: 'Preview' },
+  analytics_subscriptions_empty: { en: "No fixed-amount recurring charges detected yet in your recent transactions. Once you have a few repeat payments of the same amount (like a subscription), they'll show up here automatically.", ur: 'آپ کے حالیہ لین دین میں ابھی تک کوئی مقررہ رقم کی بار بار ادائیگی نہیں ملی۔', roman: 'Aap Ke Recent Transactions Mein Abhi Tak Koi Fixed Amount Ki Recurring Payment Nahi Mili.' },
+
+  // Wallet
+  wallet_title: { en: 'Wallet', ur: 'بٹوہ', roman: 'Wallet' },
+  wallet_subtitle: { en: 'All your bank accounts and cards, linked in one place — like Google Pay or Apple Pay, but built for FinBud.', ur: 'آپ کے تمام بینک اکاؤنٹس اور کارڈز ایک جگہ منسلک — گوگل پے یا ایپل پے کی طرح، لیکن فن بڈ کے لیے بنایا گیا۔', roman: 'Aap Ke Tamam Bank Accounts Aur Cards Aik Jagah Link — Google Pay Ya Apple Pay Ki Tarah, Lekin FinBud Ke Liye Bana.' },
+  wallet_net_worth: { en: 'Net Worth', ur: 'خالص مالیت', roman: 'Net Worth' },
+  wallet_finbud_balance: { en: 'FinBud Balance', ur: 'فن بڈ بیلنس', roman: 'FinBud Balance' },
+  wallet_linked_accounts: { en: 'Linked Accounts', ur: 'منسلک اکاؤنٹس', roman: 'Linked Accounts' },
+  wallet_other_assets: { en: 'Other Assets', ur: 'دیگر اثاثے', roman: 'Doosray Assets' },
+  wallet_edit: { en: 'Edit', ur: 'ترمیم کریں', roman: 'Edit Karein' },
+  wallet_total_net_worth: { en: 'Total Net Worth', ur: 'کل خالص مالیت', roman: 'Total Net Worth' },
+  wallet_link_note: { en: 'Link a bank account below to have its balance count toward your net worth automatically.', ur: 'نیچے بینک اکاؤنٹ منسلک کریں تاکہ اس کا بیلنس خودکار طور پر آپ کی خالص مالیت میں شمار ہو۔', roman: 'Neeche Bank Account Link Karein Taake Uska Balance Automatically Aap Ke Net Worth Mein Shamil Ho.' },
+  wallet_linked_bank_accounts: { en: 'Linked Bank Accounts', ur: 'منسلک بینک اکاؤنٹس', roman: 'Linked Bank Accounts' },
+  wallet_link_account: { en: '+ Link Account', ur: '+ اکاؤنٹ منسلک کریں', roman: '+ Account Link Karein' },
+  wallet_no_banks: { en: 'No bank accounts linked yet. Link an HBL, Meezan, or any other Pakistani bank account to see its balance alongside your FinBud balance.', ur: 'ابھی تک کوئی بینک اکاؤنٹ منسلک نہیں۔ اپنا بینک اکاؤنٹ منسلک کریں۔', roman: 'Abhi Tak Koi Bank Account Link Nahi. Apna Bank Account Link Karein.' },
+  wallet_my_cards: { en: 'My Cards', ur: 'میرے کارڈز', roman: 'Mere Cards' },
+  wallet_add_card: { en: '+ Add Card', ur: '+ کارڈ شامل کریں', roman: '+ Card Add Karein' },
+  wallet_no_cards: { en: 'No cards on file yet. Add a card to enable the Emergency lock feature and start building your wallet.', ur: 'ابھی تک کوئی کارڈ محفوظ نہیں۔ ایمرجنسی لاک فیچر کے لیے کارڈ شامل کریں۔', roman: 'Abhi Tak Koi Card Save Nahi. Emergency Lock Feature Ke Liye Card Add Karein.' },
+  wallet_how_this_works: { en: 'How This Works', ur: 'یہ کیسے کام کرتا ہے', roman: 'Yeh Kaise Kaam Karta Hai' },
+
+  // Send Money
+  send_money_title: { en: 'Send Money', ur: 'رقم بھیجیں', roman: 'Paise Bhejein' },
+  recipient_name: { en: 'Recipient Name', ur: 'وصول کنندہ کا نام', roman: 'Recipient Ka Naam' },
+  transfer_method: { en: 'Transfer Method', ur: 'منتقلی کا طریقہ', roman: 'Transfer Method' },
+  destination_bank: { en: 'Destination Bank', ur: 'منزل بینک', roman: 'Destination Bank' },
+  select_bank: { en: 'Select bank...', ur: 'بینک منتخب کریں...', roman: 'Bank Select Karein...' },
+  amount_pkr: { en: 'Amount (PKR)', ur: 'رقم (PKR)', roman: 'Amount (PKR)' },
+  purpose: { en: 'Purpose', ur: 'مقصد', roman: 'Purpose' },
+  description_optional: { en: 'Description', ur: 'تفصیل', roman: 'Tafseel' },
+  optional: { en: '(optional)', ur: '(اختیاری)', roman: '(Optional)' },
+  btn_continue: { en: 'CONTINUE', ur: 'جاری رکھیں', roman: 'Continue Karein' },
+  confirm_transfer_title: { en: 'Confirm Transfer', ur: 'منتقلی کی تصدیق کریں', roman: 'Transfer Confirm Karein' },
+  recipient: { en: 'Recipient', ur: 'وصول کنندہ', roman: 'Recipient' },
+  bank: { en: 'Bank', ur: 'بینک', roman: 'Bank' },
+  amount: { en: 'Amount', ur: 'رقم', roman: 'Amount' },
+  enter_password_confirm: { en: 'Enter your password to confirm', ur: 'تصدیق کے لیے اپنا پاس ورڈ درج کریں', roman: 'Confirm Karne Ke Liye Apna Password Likhein' },
+  btn_confirm_send: { en: 'CONFIRM & SEND', ur: 'تصدیق کریں اور بھیجیں', roman: 'Confirm Karke Bhejein' },
+  tx_successful: { en: 'Transaction Successful!', ur: 'لین دین کامیاب!', roman: 'Transaction Kamyab!' },
+  btn_download_pdf: { en: 'DOWNLOAD PDF', ur: 'پی ڈی ایف ڈاؤن لوڈ کریں', roman: 'PDF Download Karein' },
+  btn_done: { en: 'DONE', ur: 'ہو گیا', roman: 'Ho Gaya' },
+
+  // Pay Bill
+  pay_bill_title: { en: 'Pay Bill', ur: 'بل ادا کریں', roman: 'Bill Pay Karein' },
+  biller: { en: 'Biller', ur: 'بل دینے والا', roman: 'Biller' },
+  select_biller: { en: 'Select biller...', ur: 'بل دینے والا منتخب کریں...', roman: 'Biller Select Karein...' },
+  consumer_number: { en: 'Consumer Number', ur: 'کنزیومر نمبر', roman: 'Consumer Number' },
+  confirm_payment_title: { en: 'Confirm Payment', ur: 'ادائیگی کی تصدیق کریں', roman: 'Payment Confirm Karein' },
+  btn_confirm_pay: { en: 'CONFIRM & PAY', ur: 'تصدیق کریں اور ادا کریں', roman: 'Confirm Karke Pay Karein' },
+
+  // Rewards / Redeem / TopUp
+  rewards_title: { en: 'FinBud Rewards Program', ur: 'فن بڈ ریوارڈز پروگرام', roman: 'FinBud Rewards Program' },
+  current_points: { en: 'Current Points', ur: 'موجودہ پوائنٹس', roman: 'Current Points' },
+  available_points: { en: 'Available Points', ur: 'دستیاب پوائنٹس', roman: 'Available Points' },
+  btn_got_it: { en: 'GOT IT', ur: 'سمجھ گیا', roman: 'Samajh Gaya' },
+  redeem_points_title: { en: 'Redeem Points', ur: 'پوائنٹس ریڈیم کریں', roman: 'Points Redeem Karein' },
+  value: { en: 'Value', ur: 'قیمت', roman: 'Value' },
+  btn_redeem: { en: 'REDEEM', ur: 'ریڈیم کریں', roman: 'Redeem Karein' },
+  btn_close: { en: 'CLOSE', ur: 'بند کریں', roman: 'Band Karein' },
+  choose_product_title: { en: 'Choose a Product', ur: 'ایک پروڈکٹ منتخب کریں', roman: 'Aik Product Chunein' },
+  btn_confirm: { en: 'CONFIRM', ur: 'تصدیق کریں', roman: 'Confirm Karein' },
+  btn_back: { en: 'BACK', ur: 'واپس', roman: 'Wapas' },
+  topup_title: { en: 'Top Up Balance (Demo)', ur: 'بیلنس ٹاپ اپ کریں (ڈیمو)', roman: 'Balance Top Up Karein (Demo)' },
+  topup_note: { en: 'For demonstration and testing purposes only.', ur: 'صرف مظاہرے اور ٹیسٹنگ کے مقاصد کے لیے۔', roman: 'Sirf Demo Aur Testing Ke Liye.' },
+  btn_add_funds: { en: 'ADD FUNDS', ur: 'رقم شامل کریں', roman: 'Funds Add Karein' },
+  transfer_successful: { en: 'Transfer Successful!', ur: 'منتقلی کامیاب!', roman: 'Transfer Kamyab!' },
+  processing: { en: 'Processing...', ur: 'کارروائی جاری ہے...', roman: 'Processing...' },
+  send_via_finbud: { en: 'FinBud Transfer', ur: 'فن بڈ ٹرانسفر', roman: 'FinBud Transfer' },
+  send_via_bank: { en: 'Bank Transfer', ur: 'بینک ٹرانسفر', roman: 'Bank Transfer' },
+  send_via_finbud_sub: { en: 'Send instantly to another FinBud user — free', ur: 'کسی دوسرے فن بڈ صارف کو فوری بھیجیں — مفت', roman: 'Kisi Doosray FinBud User Ko Foran Bhejein — Free' },
+  send_via_bank_sub: { en: 'Send to any Pakistani bank account via 1LINK', ur: '1LINK کے ذریعے کسی بھی بینک اکاؤنٹ میں بھیجیں', roman: '1LINK Ke Zariye Kisi Bhi Bank Account Mein Bhejein' },
+  phone_number: { en: 'Phone Number', ur: 'فون نمبر', roman: 'Phone Number' },
+  bank_name: { en: 'Bank Name', ur: 'بینک کا نام', roman: 'Bank Ka Naam' },
+  iban_account_no: { en: 'IBAN / Account No.', ur: 'آئی بی اے این / اکاؤنٹ نمبر', roman: 'IBAN / Account No.' },
+  transferring_to: { en: 'Transferring to', ur: 'منتقل کیا جا رہا ہے', roman: 'Transfer Kiya Ja Raha Hai' },
+  btn_verify: { en: 'VERIFY', ur: 'تصدیق کریں', roman: 'Tasdeeq Karein' },
+  recipient_not_found: { en: 'No FinBud account exists for that phone number.', ur: 'اس فون نمبر کے لیے کوئی فن بڈ اکاؤنٹ موجود نہیں۔', roman: 'Is Phone Number Ke Liye Koi FinBud Account Mojood Nahi.' },
+  fee: { en: 'Fee', ur: 'فیس', roman: 'Fee' },
+  total_deducted: { en: 'Total Deducted', ur: 'کل کٹوتی', roman: 'Total Katouti' },
+  enter_pin_title: { en: 'Enter your 5-digit PIN', ur: 'اپنا 5 ہندسوں کا پن درج کریں', roman: 'Apna 5-Digit PIN Likhein' },
+  btn_verify_send: { en: 'VERIFY & SEND', ur: 'تصدیق کریں اور بھیجیں', roman: 'Tasdeeq Karke Bhejein' },
+  wrong_pin: { en: 'Incorrect PIN. Please try again.', ur: 'غلط پن۔ دوبارہ کوشش کریں۔', roman: 'Ghalat PIN. Dobara Koshish Karein.' },
+  btn_back: { en: 'BACK', ur: 'واپس', roman: 'Wapas' },
+  bill_category: { en: 'Bill Category', ur: 'بل کی قسم', roman: 'Bill Category' },
+  service_provider: { en: 'Service Provider', ur: 'سروس فراہم کنندہ', roman: 'Service Provider' },
+  bill_reference: { en: 'Bill Reference Number', ur: 'بل حوالہ نمبر', roman: 'Bill Reference Number' },
+  reference_number: { en: 'Reference Number', ur: 'حوالہ نمبر', roman: 'Reference Number' },
+  confirm_bill_payment: { en: 'Confirm Bill Payment', ur: 'بل کی ادائیگی کی تصدیق کریں', roman: 'Bill Payment Confirm Karein' },
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [userData, setUserData] = useState({ name: 'User', initials: 'U', balance: 0, isMasked: true, userId: '', points: 0, email: '' })
+  const [userData, setUserData] = useState({ name: 'User', initials: 'U', balance: 0, isMasked: true, userId: '', points: 0 })
   const [transactions, setTransactions] = useState([])
   const [reminders, setReminders] = useState([])
   const [breakdown, setBreakdown] = useState({})
@@ -155,6 +318,31 @@ export default function Dashboard() {
     otherAssetsAvailable: true
   })
   const printRef = useRef(null)
+
+  // ── MOBILE DETECTION ─────────────────────────────────────
+  // Drives which shell renders (MobileShell vs the existing desktop
+  // app-shell) — a real structural swap, not a CSS reflow of the same
+  // markup. matchMedia + a resize listener keeps it live if the window
+  // is resized or the device is rotated, without a page reload.
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)')
+    const handler = e => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+
+  // ── LANGUAGE ──────────────────────────────────────────────
+  // 'en' | 'ur' (Urdu script) | 'roman' (Roman Urdu). Only static UI text
+  // is translated — user-typed input, names, and transaction data always
+  // stay as entered/received.
+  const [language, setLanguage] = useState('en')
+  const [langMenuOpen, setLangMenuOpen] = useState(false)
+  function t(key) {
+    return TRANSLATIONS[key]?.[language] ?? TRANSLATIONS[key]?.en ?? key
+  }
 
   // ── ACCESSIBILITY (Module F) ────────────────────────────
   // Text size, high contrast, and simple mode are read from localStorage on
@@ -207,13 +395,25 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([])
   const [notifUnreadCount, setNotifUnreadCount] = useState(0)
 
+  const seenNotifIdsRef = useRef(new Set())
   async function loadNotifications() {
     try {
       const res = await fetch('/api/notifications?limit=20', { credentials: 'include' })
       const data = await res.json()
       if (data.success) {
-        setNotifications(data.notifications || [])
-        setNotifUnreadCount((data.notifications || []).filter(n => !n.is_read).length)
+        const list = data.notifications || []
+        // Toast any notification we haven't shown yet (e.g. money arriving
+        // from someone else while this tab is open) — first load just
+        // records what's already there instead of toasting the whole feed.
+        const isFirstLoad = seenNotifIdsRef.current.size === 0
+        list.forEach(n => {
+          if (!seenNotifIdsRef.current.has(n.id)) {
+            seenNotifIdsRef.current.add(n.id)
+            if (!isFirstLoad && !n.is_read) showToast(n.message, 'success')
+          }
+        })
+        setNotifications(list)
+        setNotifUnreadCount(list.filter(n => !n.is_read).length)
       }
     } catch {}
   }
@@ -230,6 +430,70 @@ export default function Dashboard() {
 
   useEffect(() => { loadAll() }, [])
 
+  // ── LIVE UPDATES ──────────────────────────────────────────
+  // The backend already writes both legs of a FinBud→FinBud transfer the
+  // instant it happens (sender AND recipient balance/transactions/
+  // notifications are all updated server-side in the same request — see
+  // /api/transfer/execute in app.py). But the recipient's browser has no
+  // way to know that happened until it asks. Previously we only re-fetched
+  // after actions the logged-in user themselves performed, so a recipient
+  // sitting on their dashboard in another tab/session would see nothing
+  // move until they hit refresh. Polling closes that gap; a WebSocket/SSE
+  // push would be nicer but this needs no new backend infrastructure.
+  //
+  // IMPORTANT: every modal's step content (SendMoneyStep2, PayBillStep3,
+  // etc.) is a function defined inside this component's body, so it gets
+  // a brand-new function identity every time Dashboard re-renders. Any
+  // background setState here — even one field like userData.balance —
+  // forces Dashboard to re-render, which makes React treat the currently
+  // open modal's step as a "new" component and remount it, wiping
+  // whatever the person was typing (this was the "fields keep getting
+  // wiped mid-typing" bug). So the poll must stay completely silent while
+  // a modal is open, and only catch up once it closes.
+  const modalOpenRef = useRef(false)
+  useEffect(() => { modalOpenRef.current = !!modal }, [modal])
+
+  const prevModalRef = useRef(null)
+  useEffect(() => {
+    if (prevModalRef.current && !modal) {
+      // Modal just closed — catch up on anything the poll skipped while
+      // it was open (e.g. money that arrived mid-transfer-flow).
+      refreshBalanceOnly(); loadNotifications(); loadTransactions()
+    }
+    prevModalRef.current = modal
+  }, [modal])
+
+  async function refreshBalanceOnly() {
+    try {
+      const res = await fetch('/api/user/data', { credentials: 'include' })
+      if (!res.ok) return
+      const user = await res.json()
+      setUserData(u => (u.balance === user.balance && u.points === user.points)
+        ? u
+        : { ...u, balance: user.balance, points: user.points })
+    } catch {}
+  }
+
+  useEffect(() => {
+    const POLL_MS = 8000
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return
+      if (modalOpenRef.current) return   // never refresh mid-input — see note above
+      refreshBalanceOnly()
+      loadNotifications()
+      loadTransactions()
+    }
+    const id = setInterval(tick, POLL_MS)
+    const onFocus = () => tick()
+    document.addEventListener('visibilitychange', onFocus)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onFocus)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
+
   useEffect(() => {
     if (activeView === 'advisor' && !advisor.loaded) loadAdvisorData()
   }, [activeView])
@@ -245,7 +509,7 @@ export default function Dashboard() {
       const user = await res.json()
       const parts = user.name.trim().split(' ')
       const initials = parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : user.name.slice(0,2).toUpperCase()
-      setUserData({ name: user.name, initials, balance: user.balance, isMasked: true, userId: user.userId, points: user.points, email: user.email })
+      setUserData({ name: user.name, initials, balance: user.balance, isMasked: true, userId: user.userId, points: user.points })
       loadTransactions()
       loadReminders()
       loadBreakdown()
@@ -479,243 +743,411 @@ export default function Dashboard() {
 
   // ── MODALS ──────────────────────────────────────────────
 
+  // Local mirror of the backend's fee schedule (app.py: _calc_transfer_fee),
+  // used only to preview the fee on Modal 2/3 before the server confirms it.
+  function estimateTransferFee(amount, method) {
+    if (method === 'finbud') return 0
+    return amount < 10000 ? 25 : Math.round(amount * 0.0015 * 100) / 100
+  }
+
+  // ── Modal 1: Method selection — FinBud Transfer or Bank Transfer ──────────
   function SendMoneyStep1() {
-    const [recipientName, setRecipientName] = useState('')
-    const [method, setMethod] = useState('IBAN')
-    const [recipientId, setRecipientId] = useState('')
-    const [manualBank, setManualBank] = useState('')
+    function choose(method) {
+      setPendingTransfer({ method })
+      setModal({ type: 'sendMoney2' })
+    }
+    return (
+      <div>
+        <h3>{t('send_money_title')}</h3>
+        {stepDots(1, 6)}
+        <OptionGrid
+          selected={pendingTransfer?.method}
+          onSelect={choose}
+          options={[
+            { key: 'finbud', icon: 'fa-user', label: t('send_via_finbud') },
+            { key: 'bank',   icon: 'fa-landmark', label: t('send_via_bank') },
+          ]}
+        />
+      </div>
+    )
+  }
+
+  // ── Modal 2: Recipient details — phone (FinBud) or bank + IBAN/account (Bank) ──
+  function SendMoneyStep2() {
+    const method = pendingTransfer?.method
+    const [phone, setPhone] = useState('')
+    const [bankName, setBankName] = useState('')
+    const [idType, setIdType] = useState('iban')   // 'iban' | 'account_number'
+    const [accountId, setAccountId] = useState('')
+    const [error, setError] = useState('')
+    const [loading, setLoading] = useState(false)
+
+    // IBAN and a plain account number are different things with different
+    // shapes — 24-char alphanumeric IBAN vs a shorter numeric account
+    // number — so each gets its own input handling and its own criteria.
+    function handleIdChange(v) {
+      if (idType === 'iban') setAccountId(v.toUpperCase().replace(/\s/g, '').slice(0, 24))
+      else setAccountId(v.replace(/\D/g, '').slice(0, 16))
+    }
+
+    async function handleSubmit(e) {
+      e.preventDefault()
+      setError('')
+
+      if (method === 'finbud') {
+        if (!phone.trim()) { setError('Please enter a phone number.'); return }
+        setLoading(true)
+        try {
+          const res = await fetch(`/api/transfer/finbud/lookup?phone=${encodeURIComponent(phone.trim())}`, { credentials: 'include' })
+          const data = await res.json()
+          if (!data.success) { setError(data.message || t('recipient_not_found')); setLoading(false); return }
+          setPendingTransfer(pt => ({ ...pt, phone: phone.trim(), recipientName: data.name, recipientAccount: data.account_number }))
+          setModal({ type: 'sendMoney3' })
+        } catch { setError('Server error. Please try again.') }
+        setLoading(false)
+      } else {
+        if (!bankName) { setError('Please select a bank.'); return }
+        if (idType === 'iban' && accountId.length !== 24) { setError('IBAN must be exactly 24 characters, starting with PK.'); return }
+        if (idType === 'account_number' && (accountId.length < 8 || accountId.length > 16)) { setError('Account number must be 8–16 digits.'); return }
+        setPendingTransfer(pt => ({ ...pt, bankName, identifierType: idType, accountId, recipientName: bankName }))
+        setModal({ type: 'sendMoney3' })
+      }
+    }
+
+    return (
+      <div>
+        <h3>{method === 'finbud' ? t('send_via_finbud') : t('send_via_bank')}</h3>
+        {stepDots(2, 6)}
+        <form onSubmit={handleSubmit}>
+          {method === 'finbud' ? (
+            <>
+              <label>{t('phone_number')}</label>
+              <input type="tel" required autoFocus placeholder="e.g., 03001234567" value={phone}
+                onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} />
+            </>
+          ) : (
+            <>
+              <label>{t('bank_name')}</label>
+              <select value={bankName} onChange={e => setBankName(e.target.value)} required>
+                <option value="">{t('select_bank')}</option>
+                {PAKISTAN_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+
+              <label>Identifier type</label>
+              <div className="identifier-type-toggle">
+                <button type="button" className={idType === 'iban' ? 'active' : ''}
+                  onClick={() => { setIdType('iban'); setAccountId('') }}>IBAN</button>
+                <button type="button" className={idType === 'account_number' ? 'active' : ''}
+                  onClick={() => { setIdType('account_number'); setAccountId('') }}>Account Number</button>
+              </div>
+
+              {idType === 'iban' ? (
+                <>
+                  <label>IBAN</label>
+                  <input type="text" required placeholder="e.g., PK36SCBL0000001123456702" value={accountId}
+                    maxLength={24} onChange={e => handleIdChange(e.target.value)} />
+                  <div className="bank-detect-note">{accountId.length}/24 characters — must start with PK</div>
+                </>
+              ) : (
+                <>
+                  <label>Account Number</label>
+                  <input type="text" inputMode="numeric" required placeholder="e.g., 001234567890" value={accountId}
+                    maxLength={16} onChange={e => handleIdChange(e.target.value)} />
+                  <div className="bank-detect-note">{accountId.length} digits (8–16 required) — numbers only</div>
+                </>
+              )}
+            </>
+          )}
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
+          <button type="submit" className="modal-btn-primary" disabled={loading}>
+            {loading ? t('processing') : t('btn_continue')}
+          </button>
+          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'sendMoney1' })}>{t('btn_back')}</button>
+        </form>
+      </div>
+    )
+  }
+
+  // ── Modal 3: Amount ─────────────────────────────────────────────────────────
+  function SendMoneyStep3() {
     const [amount, setAmount] = useState('')
-    const [purpose, setPurpose] = useState('Rent')
-    const [category, setCategory] = useState('Transfer')
     const [error, setError] = useState('')
     const [usage, setUsage] = useState({ remaining: DAILY_TRANSFER_LIMIT })
 
     useEffect(() => { getDailyLimitUsage().then(setUsage) }, [])
 
-    const placeholders = { 'IBAN': 'e.g., PK36SCBL0000001123456702', 'Account Number': 'e.g., 001123456702', 'Raast ID': 'e.g., 03001234567' }
-    const detectedBank = method === 'IBAN' ? detectBankFromIBAN(recipientId) : null
-    const destinationBank = method === 'IBAN' ? detectedBank : (method === 'Account Number' ? manualBank : null)
-
-    function handleIdChange(v) {
-      if (method === 'IBAN') {
-        // IBAN validation rules from the mentor session: auto-capitalize, and
-        // hard-cap at exactly 24 characters (the Pakistani IBAN length).
-        setRecipientId(v.toUpperCase().replace(/\s/g, '').slice(0, 24))
-      } else {
-        setRecipientId(v)
-      }
-    }
-
     function handleSubmit(e) {
       e.preventDefault()
       const amt = parseFloat(amount)
-      if (!recipientName.trim()) { setError('Please enter the recipient\'s name.'); return }
-      if (method === 'IBAN' && recipientId.length !== 24) { setError('IBAN must be exactly 24 characters.'); return }
-      if (method === 'Account Number' && !manualBank) { setError('Please select the destination bank.'); return }
       if (isNaN(amt) || amt <= 0) { setError('Please enter a valid positive amount.'); return }
       if (amt > usage.remaining) { setError(`Exceeds your remaining daily limit of PKR ${usage.remaining.toLocaleString('en-PK')}.`); return }
-      setPendingTransfer({ method, recipientName, recipientIdentifier: recipientId, destinationBank, amount: amt, purpose, category })
-      setModal({ type: 'sendMoney2' })
+      const fee = estimateTransferFee(amt, pendingTransfer.method)
+      setPendingTransfer(pt => ({ ...pt, amount: amt, fee, totalDeducted: Math.round((amt + fee) * 100) / 100 }))
+      setModal({ type: 'sendMoney4' })
     }
 
     return (
       <div>
-        <h3>Send Money</h3>
-        {stepDots(1, 3)}
+        <h3>{t('send_money_title')}</h3>
+        {stepDots(3, 6)}
+        <div className="summary-box" style={{ marginBottom: 16 }}>
+          <div className="summary-row"><span>{t('transferring_to')}</span><strong>{pendingTransfer?.recipientName}</strong></div>
+          {pendingTransfer?.method === 'bank' && (
+            <div className="summary-row"><span>{pendingTransfer.identifierType === 'iban' ? 'IBAN' : 'Account No.'}</span><strong>{pendingTransfer.accountId}</strong></div>
+          )}
+        </div>
         <form onSubmit={handleSubmit}>
-          <label>Recipient Name</label>
-          <input type="text" required autoFocus placeholder="e.g., Ahmed Khan" value={recipientName} onChange={e => setRecipientName(e.target.value)} />
-
-          <label>Transfer Method</label>
-          <select value={method} onChange={e => { setMethod(e.target.value); setRecipientId(''); setManualBank('') }} required>
-            <option>IBAN</option><option>Account Number</option><option>Raast ID</option>
-          </select>
-
-          <label>{method}</label>
-          <input type="text" required placeholder={placeholders[method]} value={recipientId}
-            maxLength={method === 'IBAN' ? 24 : undefined}
-            onChange={e => handleIdChange(e.target.value)} />
-          {method === 'IBAN' && (
-            <div className="bank-detect-note">
-              {recipientId.length === 24
-                ? (detectedBank ? `Destination Bank: ${detectedBank}` : 'Bank code not recognized — double-check the IBAN.')
-                : `${recipientId.length}/24 characters`}
-            </div>
-          )}
-
-          {method === 'Account Number' && (
-            <>
-              <label>Destination Bank</label>
-              <select value={manualBank} onChange={e => setManualBank(e.target.value)} required>
-                <option value="">Select bank...</option>
-                {PAKISTAN_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
-              </select>
-            </>
-          )}
-
-          <label>Amount (PKR)</label>
-          <input type="number" required min="1" step="0.01" placeholder="e.g., 5000" value={amount} onChange={e => setAmount(e.target.value)} />
-          <label>Purpose</label>
-          <select value={purpose} onChange={e => setPurpose(e.target.value)} required>
-            <option>Rent</option><option>Salary</option><option>Business</option><option>Personal</option><option>Other</option>
-          </select>
-          <label>Description <span style={{ fontWeight: 400, color: '#9aa0ab', textTransform: 'none' }}>(optional)</span></label>
-          <select value={category} onChange={e => setCategory(e.target.value)}>
-            {expenseCategories.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+          <label>{t('amount_pkr')}</label>
+          <input type="number" required autoFocus min="1" step="0.01" placeholder="e.g., 5000" value={amount} onChange={e => setAmount(e.target.value)} />
           {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
-          <button type="submit" className="modal-btn-primary">CONTINUE</button>
+          <button type="submit" className="modal-btn-primary">{t('btn_continue')}</button>
+          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'sendMoney2' })}>{t('btn_back')}</button>
         </form>
         <div className="limit-note">Remaining today: <strong>PKR {usage.remaining.toLocaleString('en-PK')}</strong> of PKR {DAILY_TRANSFER_LIMIT.toLocaleString('en-PK')} daily limit</div>
       </div>
     )
   }
 
-  function SendMoneyStep2() {
-    const [password, setPassword] = useState('')
+  // ── Modal 4: Transaction Summary ───────────────────────────────────────────
+  function SendMoneyStep4() {
+    return (
+      <div>
+        <h3>{t('confirm_transfer_title')}</h3>
+        {stepDots(4, 6)}
+        <div className="summary-box">
+          <div className="summary-row"><span>{t('recipient')}</span><strong>{pendingTransfer?.recipientName}</strong></div>
+          {pendingTransfer?.method === 'bank' && (
+            <>
+              <div className="summary-row"><span>{t('bank')}</span><strong>{pendingTransfer.bankName}</strong></div>
+              <div className="summary-row"><span>{pendingTransfer.identifierType === 'iban' ? 'IBAN' : 'Account No.'}</span><strong>{pendingTransfer.accountId}</strong></div>
+            </>
+          )}
+          {pendingTransfer?.method === 'finbud' && (
+            <div className="summary-row"><span>{t('phone_number')}</span><strong>{pendingTransfer.phone}</strong></div>
+          )}
+          <div className="summary-row"><span>{t('amount')}</span><strong>PKR {pendingTransfer?.amount?.toLocaleString('en-PK')}</strong></div>
+          <div className="summary-row"><span>{t('fee')}</span><strong>{pendingTransfer?.fee > 0 ? `PKR ${pendingTransfer.fee.toLocaleString('en-PK')}` : 'Free'}</strong></div>
+          <div className="summary-row"><span>{t('total_deducted')}</span><strong>PKR {pendingTransfer?.totalDeducted?.toLocaleString('en-PK')}</strong></div>
+        </div>
+        <button type="button" className="modal-btn-primary" onClick={() => setModal({ type: 'sendMoney5' })}>{t('btn_confirm')}</button>
+        <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'sendMoney3' })}>{t('btn_back')}</button>
+      </div>
+    )
+  }
+
+  // ── Modal 5: Security Verification (5-digit PIN) ───────────────────────────
+  function SendMoneyStep5() {
+    const [digits, setDigits] = useState(['', '', '', '', ''])
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
+    const inputRefs = useRef([])
+
+    function handleDigitChange(idx, v) {
+      const clean = v.replace(/\D/g, '').slice(-1)
+      const next = [...digits]
+      next[idx] = clean
+      setDigits(next)
+      if (clean && idx < 4) inputRefs.current[idx + 1]?.focus()
+    }
+
+    function handleKeyDown(idx, e) {
+      if (e.key === 'Backspace' && !digits[idx] && idx > 0) inputRefs.current[idx - 1]?.focus()
+    }
 
     async function handleSubmit(e) {
       e.preventDefault()
+      const pin = digits.join('')
+      if (pin.length !== 5) { setError('Please enter all 5 digits.'); return }
       setError(''); setLoading(true)
       try {
-        const vRes = await fetch('/api/user/verify-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ password }) })
-        const vData = await vRes.json()
-        if (!vData.success) { setError('Incorrect password. Please try again.'); setLoading(false); return }
-        const txRes = await fetch('/api/transaction/create', {
+        const body = {
+          method: pendingTransfer.method,
+          amount: pendingTransfer.amount,
+          pin,
+          ...(pendingTransfer.method === 'finbud'
+            ? { recipient_phone: pendingTransfer.phone }
+            : { bank_name: pendingTransfer.bankName, identifier_type: pendingTransfer.identifierType, account_id: pendingTransfer.accountId })
+        }
+        const res = await fetch('/api/transfer/execute', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-          body: JSON.stringify({ type: 'transfer', amount: pendingTransfer.amount, recipient: pendingTransfer.recipientName, recipient_account: pendingTransfer.recipientIdentifier, transfer_method: pendingTransfer.method, destination_bank: pendingTransfer.destinationBank, purpose: pendingTransfer.purpose, category: pendingTransfer.category })
+          body: JSON.stringify(body)
         })
-        const txData = await txRes.json()
+        const txData = await res.json()
         if (txData.success) {
           setUserData(u => ({ ...u, balance: txData.new_balance, points: txData.new_points }))
           loadTransactions(); loadBreakdown(); loadNotifications()
           const feeNote = txData.fee_applied ? ` (+ PKR ${txData.fee.toLocaleString('en-PK')} fee)` : ''
-          showToast(`PKR ${pendingTransfer.amount.toLocaleString('en-PK')} sent to ${pendingTransfer.recipientName}${pendingTransfer.category !== 'Transfer' ? ` — ${pendingTransfer.category}` : ''}${feeNote}`)
-          setModal({ type: 'sendMoney3', txData })
-        } else { setError(txData.message || 'Transaction failed.') }
+          showToast(`PKR ${pendingTransfer.amount.toLocaleString('en-PK')} sent to ${pendingTransfer.recipientName}${feeNote}`)
+          setModal({ type: 'sendMoney6', txData })
+        } else {
+          setError(txData.message || t('wrong_pin'))
+          setDigits(['', '', '', '', ''])
+          inputRefs.current[0]?.focus()
+        }
       } catch { setError('Server error. Please try again.') }
       setLoading(false)
     }
 
     return (
       <div>
-        <h3>Confirm Transfer</h3>
-        {stepDots(2, 3)}
-        <div className="summary-box">
-          <div className="summary-row"><span>Recipient</span><strong>{pendingTransfer?.recipientName}</strong></div>
-          {pendingTransfer?.destinationBank && <div className="summary-row"><span>Bank</span><strong>{pendingTransfer.destinationBank}</strong></div>}
-          <div className="summary-row"><span>{pendingTransfer?.method}</span><strong>{pendingTransfer?.recipientIdentifier}</strong></div>
-          <div className="summary-row"><span>Amount</span><strong>PKR {pendingTransfer?.amount?.toLocaleString('en-PK')}</strong></div>
-          <div className="summary-row"><span>Purpose</span><strong>{pendingTransfer?.purpose}</strong></div>
-          {pendingTransfer?.category && pendingTransfer.category !== 'Transfer' && (
-            <div className="summary-row"><span>Description</span><strong>{pendingTransfer.category}</strong></div>
-          )}
-        </div>
+        <h3>{t('enter_pin_title')}</h3>
+        {stepDots(5, 6)}
         <form onSubmit={handleSubmit}>
-          <label>Enter your password to confirm</label>
-          <input type="password" required autoFocus placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
-          <button type="submit" className="modal-btn-primary" disabled={loading}>{loading ? 'Processing...' : 'CONFIRM & SEND'}</button>
-          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'sendMoney1' })}>BACK</button>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '20px 0' }}>
+            {digits.map((d, idx) => (
+              <input
+                key={idx}
+                ref={el => (inputRefs.current[idx] = el)}
+                type="password"
+                inputMode="numeric"
+                maxLength={1}
+                autoFocus={idx === 0}
+                value={d}
+                onChange={e => handleDigitChange(idx, e.target.value)}
+                onKeyDown={e => handleKeyDown(idx, e)}
+                style={{ width: 44, height: 52, textAlign: 'center', fontSize: 20, borderRadius: 8, border: '1px solid #d1d5db' }}
+              />
+            ))}
+          </div>
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8, textAlign: 'center' }}>{error}</p>}
+          <button type="submit" className="modal-btn-primary" disabled={loading}>{loading ? t('processing') : t('btn_verify_send')}</button>
+          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'sendMoney4' })}>{t('btn_back')}</button>
         </form>
-        <p style={{ fontSize: 11, color: '#6b7280', marginTop: 12 }}>Note: this confirms with your account password.</p>
       </div>
     )
   }
 
-  function SendMoneyStep3({ txData }) {
+  // ── Modal 6: Success & Receipt ──────────────────────────────────────────────
+  function SendMoneyStep6({ txData }) {
     const txId = txData?.transaction_id
     return (
       <div style={{ textAlign: 'center', padding: 10 }}>
-        {stepDots(3, 3)}
+        {stepDots(6, 6)}
         <div className="success-icon">✓</div>
-        <h3 style={{ color: 'var(--income)', marginBottom: 15 }}>Transfer Successful!</h3>
+        <h3 style={{ color: 'var(--income)', marginBottom: 15 }}>{t('transfer_successful')}</h3>
         <p style={{ fontSize: 16, marginBottom: 5 }}>PKR {pendingTransfer?.amount?.toLocaleString('en-PK')} sent to {pendingTransfer?.recipientName}</p>
-        <p style={{ fontSize: 14, color: '#666', marginBottom: 10 }}>via {pendingTransfer?.method} · {pendingTransfer?.purpose}{pendingTransfer?.category && pendingTransfer.category !== 'Transfer' ? ` · ${pendingTransfer.category}` : ''}</p>
+        <p style={{ fontSize: 14, color: '#666', marginBottom: 10 }}>
+          via {pendingTransfer?.method === 'finbud' ? t('send_via_finbud') : t('send_via_bank')}
+        </p>
         {txData?.fee_applied && (
-          <p style={{ fontSize: 13, color: 'var(--warning)', marginBottom: 10 }}>+ PKR {txData.fee?.toLocaleString('en-PK')} transfer fee (external bank transfer) — total deducted: PKR {(pendingTransfer.amount + txData.fee).toLocaleString('en-PK')}</p>
+          <p style={{ fontSize: 13, color: 'var(--warning)', marginBottom: 10 }}>+ PKR {txData.fee?.toLocaleString('en-PK')} transfer fee — total deducted: PKR {(pendingTransfer.amount + txData.fee).toLocaleString('en-PK')}</p>
         )}
         <p style={{ fontSize: 14, color: 'var(--primary-purple)' }}>You earned {txData?.points_earned} reward points!</p>
         <div className="receipt-actions">
-          <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => downloadReceipt(txId)}>DOWNLOAD PDF</button>
-          <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => emailReceipt(txId)}>EMAIL RECEIPT</button>
+          <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => downloadReceipt(txId)}>{t('btn_download_pdf')}</button>
         </div>
-        <button className="modal-btn-secondary" onClick={() => setModal(null)}>DONE</button>
+        <button className="modal-btn-secondary" onClick={() => setModal(null)}>{t('btn_done')}</button>
       </div>
     )
   }
 
+  // ── Modal 1: Bill category — icon boxes (Electricity, Gas, Internet...) ────
+  // Keys must match the categories the backend's BILL_PROVIDERS dict knows
+  // about (see /api/bills/providers in app.py).
   function PayBillStep1() {
-    const [category, setCategory] = useState('')
-    const [provider, setProvider] = useState('')
-    const [providers, setProviders] = useState([])
-    const [billId, setBillId] = useState('')
-    const [amount, setAmount] = useState('')
-    const [error, setError] = useState('')
-    const [savedRef, setSavedRef] = useState(null)
-    const [loadingProviders, setLoadingProviders] = useState(false)
-
-    async function handleCategoryChange(cat) {
-      setCategory(cat); setProvider(''); setProviders([]); setSavedRef(null); setError('')
-      if (!cat) return
-      setLoadingProviders(true)
-      try {
-        const res = await fetch(`/api/bills/providers?category=${encodeURIComponent(cat)}`, { credentials: 'include' })
-        if (res.status === 401) { setError('Your session has expired — please log in again.'); setLoadingProviders(false); return }
-        const data = await res.json()
-        if (data.success && Array.isArray(data.providers) && data.providers.length > 0) {
-          setProviders(data.providers)
-        } else {
-          setError(data.message || 'Could not load providers for this category. Please try again.')
-        }
-      } catch {
-        setError('Could not reach the server to load providers. Check your connection and try again.')
-      }
-      setLoadingProviders(false)
-    }
-
-    async function handleProviderChange(p) {
-      setProvider(p); setSavedRef(null)
-      if (!p) return
-      try {
-        const res = await fetch(`/api/bills/saved-ref?provider=${encodeURIComponent(p)}`, { credentials: 'include' })
-        if (!res.ok) return
-        const data = await res.json()
-        if (data.success && data.has_saved_ref) setSavedRef(data.ref)
-      } catch {
-        // Non-critical — the saved-account prompt is a convenience, not a
-        // required step, so a failure here shouldn't block bill entry.
-      }
-    }
-
-    function handleSubmit(e) {
-      e.preventDefault()
-      const amt = parseFloat(amount)
-      if (!provider) { setError('Please select a service provider.'); return }
-      if (isNaN(amt) || amt <= 0) { setError('Please enter a valid positive amount.'); return }
-      setPendingBill({ biller: provider, billId, amount: amt })
+    const categories = [
+      { key: 'electricity', icon: 'fa-bolt', label: 'Electricity' },
+      { key: 'gas', icon: 'fa-fire', label: 'Gas' },
+      { key: 'internet', icon: 'fa-wifi', label: 'Internet' },
+    ]
+    function choose(cat) {
+      setPendingBill({ category: cat })
       setModal({ type: 'payBill2' })
+    }
+    return (
+      <div>
+        <h3>{t('pay_bill_title')}</h3>
+        {stepDots(1, 6)}
+        <OptionGrid selected={pendingBill?.category} onSelect={choose} options={categories} columns={3} compact />
+      </div>
+    )
+  }
+
+  // ── Modal 2: Service provider within the chosen category — icon boxes ─────
+  function PayBillStep2() {
+    const [providers, setProviders] = useState([])
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState('')
+
+    useEffect(() => {
+      let cancelled = false
+      async function load() {
+        setLoading(true); setError('')
+        try {
+          const res = await fetch(`/api/bills/providers?category=${encodeURIComponent(pendingBill.category)}`, { credentials: 'include' })
+          if (res.status === 401) { setError('Your session has expired — please log in again.'); setLoading(false); return }
+          const data = await res.json()
+          if (!cancelled) {
+            if (data.success && Array.isArray(data.providers) && data.providers.length > 0) setProviders(data.providers)
+            else setError(data.message || 'Could not load providers for this category.')
+          }
+        } catch { if (!cancelled) setError('Could not reach the server. Check your connection and try again.') }
+        if (!cancelled) setLoading(false)
+      }
+      load()
+      return () => { cancelled = true }
+    }, [])
+
+    function choose(p) {
+      setPendingBill(pb => ({ ...pb, biller: p }))
+      setModal({ type: 'payBill3' })
     }
 
     return (
       <div>
-        <h3>Pay Bill</h3>
-        {stepDots(1, 3)}
+        <h3>{t('service_provider')}</h3>
+        {stepDots(2, 6)}
+        {loading ? (
+          <div className="option-grid-loading">Loading providers…</div>
+        ) : error ? (
+          <p style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</p>
+        ) : (
+          <OptionGrid variant="list" selected={pendingBill?.biller} onSelect={choose}
+            options={providers.map(p => ({ key: p, icon: 'fa-building', label: p }))} />
+        )}
+        <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill1' })}>{t('btn_back')}</button>
+      </div>
+    )
+  }
+
+  // ── Modal 3: Bill reference number ──────────────────────────────────────────
+  function PayBillStep3({ inlineError }) {
+    const [billId, setBillId] = useState(pendingBill?.billId || '')
+    const [savedRef, setSavedRef] = useState(null)
+    const [error, setError] = useState(inlineError || '')
+
+    useEffect(() => {
+      let cancelled = false
+      async function checkSaved() {
+        try {
+          const res = await fetch(`/api/bills/saved-ref?provider=${encodeURIComponent(pendingBill.biller)}`, { credentials: 'include' })
+          if (!res.ok) return
+          const data = await res.json()
+          if (!cancelled && data.success && data.has_saved_ref) setSavedRef(data.ref)
+        } catch {
+          // Non-critical — the saved-account prompt is a convenience, not a
+          // required step, so a failure here shouldn't block bill entry.
+        }
+      }
+      checkSaved()
+      return () => { cancelled = true }
+    }, [])
+
+    function handleSubmit(e) {
+      e.preventDefault()
+      if (!billId.trim()) { setError('Please enter your bill reference number.'); return }
+      setPendingBill(pb => ({ ...pb, billId: billId.trim() }))
+      setModal({ type: 'payBill4' })
+    }
+
+    return (
+      <div>
+        <h3>{t('bill_reference')}</h3>
+        {stepDots(3, 6)}
+        <div className="summary-box" style={{ marginBottom: 16 }}>
+          <div className="summary-row"><span>{t('biller')}</span><strong>{pendingBill?.biller}</strong></div>
+        </div>
         <form onSubmit={handleSubmit}>
-          <label>Bill Category</label>
-          <select value={category} onChange={e => handleCategoryChange(e.target.value)} required>
-            <option value="">Select...</option>
-            <option value="electricity">Electricity</option>
-            <option value="gas">Gas</option>
-            <option value="internet">Internet</option>
-          </select>
-          <label>Service Provider</label>
-          <select value={provider} onChange={e => handleProviderChange(e.target.value)} required disabled={!category || loadingProviders}>
-            <option value="">{loadingProviders ? 'Loading...' : 'Select a category first'}</option>
-            {providers.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
           {savedRef && (
             <div className="saved-account-prompt">
               Are you referring to your previously saved account <strong>{savedRef}</strong>?
@@ -725,29 +1157,82 @@ export default function Dashboard() {
               </div>
             </div>
           )}
-          <label>Bill Reference Number</label>
-          <input type="text" required placeholder="Enter reference number" value={billId} onChange={e => setBillId(e.target.value)} />
-          <label>Amount (PKR)</label>
-          <input type="number" required min="10" step="0.01" placeholder="e.g., 6200" value={amount} onChange={e => setAmount(e.target.value)} />
+          <label>{t('bill_reference')}</label>
+          <input type="text" required autoFocus placeholder="Enter reference number" value={billId} onChange={e => setBillId(e.target.value)} />
           {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
-          <button type="submit" className="modal-btn-primary">CONTINUE</button>
+          <button type="submit" className="modal-btn-primary">{t('btn_continue')}</button>
+          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill2' })}>{t('btn_back')}</button>
         </form>
       </div>
     )
   }
 
-  function PayBillStep2({ inlineError }) {
-    const [password, setPassword] = useState('')
+  // ── Modal 4: Amount ─────────────────────────────────────────────────────────
+  function PayBillStep4() {
+    const [amount, setAmount] = useState(pendingBill?.amount || '')
+    const [error, setError] = useState('')
+
+    function handleSubmit(e) {
+      e.preventDefault()
+      const amt = parseFloat(amount)
+      if (isNaN(amt) || amt <= 0) { setError('Please enter a valid positive amount.'); return }
+      setPendingBill(pb => ({ ...pb, amount: amt }))
+      setModal({ type: 'payBill5' })
+    }
+
+    return (
+      <div>
+        <h3>{t('amount_pkr')}</h3>
+        {stepDots(4, 6)}
+        <div className="summary-box" style={{ marginBottom: 16 }}>
+          <div className="summary-row"><span>{t('biller')}</span><strong>{pendingBill?.biller}</strong></div>
+          <div className="summary-row"><span>{t('reference_number')}</span><strong>{pendingBill?.billId}</strong></div>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <label>{t('amount_pkr')}</label>
+          <input type="number" required autoFocus min="10" step="0.01" placeholder="e.g., 6200" value={amount} onChange={e => setAmount(e.target.value)} />
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
+          <button type="submit" className="modal-btn-primary">{t('btn_continue')}</button>
+          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill3' })}>{t('btn_back')}</button>
+        </form>
+      </div>
+    )
+  }
+
+  // ── Modal 5: Confirm & password ─────────────────────────────────────────────
+  function PayBillStep5({ inlineError }) {
+    const [digits, setDigits] = useState(['', '', '', '', ''])
     const [error, setError] = useState(inlineError || '')
     const [loading, setLoading] = useState(false)
+    const inputRefs = useRef([])
+
+    function handleDigitChange(idx, v) {
+      const clean = v.replace(/\D/g, '').slice(-1)
+      const next = [...digits]
+      next[idx] = clean
+      setDigits(next)
+      if (clean && idx < 4) inputRefs.current[idx + 1]?.focus()
+    }
+
+    function handleKeyDown(idx, e) {
+      if (e.key === 'Backspace' && !digits[idx] && idx > 0) inputRefs.current[idx - 1]?.focus()
+    }
 
     async function handleSubmit(e) {
       e.preventDefault()
+      const pin = digits.join('')
+      if (pin.length !== 5) { setError('Please enter all 5 digits.'); return }
       setError(''); setLoading(true)
       try {
-        const vRes = await fetch('/api/user/verify-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ password }) })
+        const vRes = await fetch('/api/user/verify-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ password: pin }) })
         const vData = await vRes.json()
-        if (!vData.success) { setError('Incorrect password. Please try again.'); setLoading(false); return }
+        if (!vData.success) {
+          setError('Incorrect PIN. Please try again.')
+          setDigits(['', '', '', '', ''])
+          inputRefs.current[0]?.focus()
+          setLoading(false)
+          return
+        }
         const txRes = await fetch('/api/transaction/create', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
           body: JSON.stringify({ type: 'bill', amount: pendingBill.amount, biller: pendingBill.biller, billId: pendingBill.billId })
@@ -757,47 +1242,62 @@ export default function Dashboard() {
           setUserData(u => ({ ...u, balance: txData.new_balance, points: txData.new_points }))
           loadTransactions(); loadBreakdown(); loadReminders(); loadNotifications()
           showToast(`PKR ${pendingBill.amount.toLocaleString('en-PK')} paid to ${pendingBill.biller}`)
-          setModal({ type: 'payBill3', txData })
-        } else { setModal({ type: 'payBill2', inlineError: txData.message || 'Payment failed.' }) }
+          setModal({ type: 'payBill6', txData })
+        } else { setModal({ type: 'payBill5', inlineError: txData.message || 'Payment failed.' }) }
       } catch { setError('Server error. Please try again.') }
       setLoading(false)
     }
 
     return (
       <div>
-        <h3>Confirm Bill Payment</h3>
-        {stepDots(2, 3)}
+        <h3>{t('confirm_bill_payment')}</h3>
+        {stepDots(5, 6)}
         <div className="summary-box">
-          <div className="summary-row"><span>Biller</span><strong>{pendingBill?.biller}</strong></div>
-          <div className="summary-row"><span>Reference Number</span><strong>{pendingBill?.billId}</strong></div>
-          <div className="summary-row"><span>Amount</span><strong>PKR {pendingBill?.amount?.toLocaleString('en-PK')}</strong></div>
+          <div className="summary-row"><span>{t('biller')}</span><strong>{pendingBill?.biller}</strong></div>
+          <div className="summary-row"><span>{t('reference_number')}</span><strong>{pendingBill?.billId}</strong></div>
+          <div className="summary-row"><span>{t('amount')}</span><strong>PKR {pendingBill?.amount?.toLocaleString('en-PK')}</strong></div>
         </div>
-        {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
         <form onSubmit={handleSubmit}>
-          <label>Enter your password to confirm</label>
-          <input type="password" required autoFocus placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-          <button type="submit" className="modal-btn-primary" disabled={loading}>{loading ? 'Processing...' : 'CONFIRM & PAY'}</button>
-          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill1' })}>BACK</button>
+          <label style={{ textAlign: 'center', display: 'block' }}>{t('enter_pin_title')}</label>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '14px 0 20px' }}>
+            {digits.map((d, idx) => (
+              <input
+                key={idx}
+                ref={el => (inputRefs.current[idx] = el)}
+                type="password"
+                inputMode="numeric"
+                maxLength={1}
+                autoFocus={idx === 0}
+                value={d}
+                onChange={e => handleDigitChange(idx, e.target.value)}
+                onKeyDown={e => handleKeyDown(idx, e)}
+                style={{ width: 44, height: 52, textAlign: 'center', fontSize: 20, borderRadius: 8, border: '1px solid #d1d5db' }}
+              />
+            ))}
+          </div>
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8, textAlign: 'center' }}>{error}</p>}
+          <button type="submit" className="modal-btn-primary" disabled={loading}>{loading ? t('processing') : t('btn_confirm_pay')}</button>
+          <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill4' })}>{t('btn_back')}</button>
         </form>
       </div>
     )
   }
 
-  function PayBillStep3({ txData }) {
+  // ── Modal 6: Success ─────────────────────────────────────────────────────────
+  function PayBillStep6({ txData }) {
     const txId = txData?.transaction_id
     return (
       <div style={{ textAlign: 'center', padding: 10 }}>
-        {stepDots(3, 3)}
+        {stepDots(6, 6)}
         <div className="success-icon">✓</div>
-        <h3 style={{ color: 'var(--income)', marginBottom: 15 }}>Transaction Successful!</h3>
+        <h3 style={{ color: 'var(--income)', marginBottom: 15 }}>{t('tx_successful')}</h3>
         <p style={{ fontSize: 16, marginBottom: 10 }}>Your {pendingBill?.biller} bill has been paid successfully!</p>
-        <p style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>Amount: <strong>PKR {pendingBill?.amount?.toLocaleString('en-PK')}</strong></p>
+        <p style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>{t('amount')}: <strong>PKR {pendingBill?.amount?.toLocaleString('en-PK')}</strong></p>
         <p style={{ fontSize: 14, color: 'var(--primary-purple)' }}>You earned {txData?.points_earned} reward points!</p>
         <div className="receipt-actions">
-          <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => downloadReceipt(txId)}>DOWNLOAD PDF</button>
-          <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => emailReceipt(txId)}>EMAIL RECEIPT</button>
-        </div>
-        <button className="modal-btn-secondary" onClick={() => setModal(null)}>DONE</button>
+          <button className="modal-btn-primary" style={{ marginTop: 0 }} onClick={() => downloadReceipt(txId)}>{t('btn_download_pdf')}</button>
+                  </div>
+        <button className="modal-btn-secondary" onClick={() => setModal(null)}>{t('btn_done')}</button>
       </div>
     )
   }
@@ -805,16 +1305,16 @@ export default function Dashboard() {
   function RewardsInfo() {
     return (
       <div>
-        <h3>FinBud Rewards Program</h3>
-        <h4 style={{ color: 'var(--income)', margin: '20px 0' }}>Current Points: {userData.points}</h4>
+        <h3>{t('rewards_title')}</h3>
+        <h4 style={{ color: 'var(--income)', margin: '20px 0' }}>{t('current_points')}: {userData.points}</h4>
         <p style={{ marginBottom: 20 }}>You earn 5 points for every PKR 1,000 spent via FinBud transfers or bill payments.</p>
         <div style={{ background: 'var(--secondary-purple)', padding: 20, borderRadius: 8, marginBottom: 20 }}>
-          {Object.values(REDEMPTION_TIERS).map(t => (
-            <p key={t.label} style={{ margin: '10px 0' }}><strong>{t.points_cost} Points:</strong> {t.label} — PKR {t.pkr_value.toLocaleString('en-PK')}</p>
+          {Object.values(REDEMPTION_TIERS).map(tier => (
+            <p key={tier.label} style={{ margin: '10px 0' }}><strong>{tier.points_cost} Points:</strong> {tier.label} — PKR {tier.pkr_value.toLocaleString('en-PK')}</p>
           ))}
         </div>
         <p style={{ fontSize: 12, color: '#777' }}>Use "Redeem Points" to convert your points into one of the rewards above.</p>
-        <button className="modal-btn-primary" onClick={() => setModal(null)}>GOT IT</button>
+        <button className="modal-btn-primary" onClick={() => setModal(null)}>{t('btn_got_it')}</button>
       </div>
     )
   }
@@ -839,20 +1339,20 @@ export default function Dashboard() {
 
     return (
       <div>
-        <h3>Redeem Points</h3>
-        <h4 style={{ color: 'var(--income)', margin: '20px 0' }}>Available Points: {userData.points}</h4>
+        <h3>{t('redeem_points_title')}</h3>
+        <h4 style={{ color: 'var(--income)', margin: '20px 0' }}>{t('available_points')}: {userData.points}</h4>
         {message && <p style={{ color: messageType === 'success' ? 'var(--income)' : 'var(--danger)', fontSize: 13, marginBottom: 10 }}>{message}</p>}
         {Object.entries(REDEMPTION_TIERS).map(([key, tier]) => (
           <div key={key} className="summary-box" style={{ marginBottom: 14 }}>
             <div className="summary-row"><span>{tier.label}</span><strong>{tier.points_cost} pts</strong></div>
-            <div className="summary-row"><span>Value</span><strong>PKR {tier.pkr_value.toLocaleString('en-PK')}</strong></div>
+            <div className="summary-row"><span>{t('value')}</span><strong>PKR {tier.pkr_value.toLocaleString('en-PK')}</strong></div>
             <button className="modal-btn-primary" style={{ marginTop: 10 }}
               onClick={() => key === 'product_purchase' ? setModal({ type: 'productSelect' }) : redeem(key)}>
-              REDEEM
+              {t('btn_redeem')}
             </button>
           </div>
         ))}
-        <button className="modal-btn-secondary" onClick={() => setModal(null)}>CLOSE</button>
+        <button className="modal-btn-secondary" onClick={() => setModal(null)}>{t('btn_close')}</button>
       </div>
     )
   }
@@ -872,15 +1372,15 @@ export default function Dashboard() {
     }
     return (
       <div>
-        <h3>Choose a Product</h3>
-        <h4 style={{ color: 'var(--income)', margin: '20px 0' }}>Available Points: {userData.points}</h4>
+        <h3>{t('choose_product_title')}</h3>
+        <h4 style={{ color: 'var(--income)', margin: '20px 0' }}>{t('available_points')}: {userData.points}</h4>
         {Object.entries(MOCK_PRODUCT_CATALOGUE).map(([id, p]) => (
           <div key={id} className="summary-box" style={{ marginBottom: 14 }}>
             <div className="summary-row"><span>{p.name}</span><strong>PKR {p.pkr_value.toLocaleString('en-PK')}</strong></div>
-            <button className="modal-btn-primary" style={{ marginTop: 10 }} onClick={() => redeem(id)}>CONFIRM</button>
+            <button className="modal-btn-primary" style={{ marginTop: 10 }} onClick={() => redeem(id)}>{t('btn_confirm')}</button>
           </div>
         ))}
-        <button className="modal-btn-secondary" onClick={() => setModal({ type: 'redeemPoints' })}>BACK</button>
+        <button className="modal-btn-secondary" onClick={() => setModal({ type: 'redeemPoints' })}>{t('btn_back')}</button>
       </div>
     )
   }
@@ -907,13 +1407,13 @@ export default function Dashboard() {
     }
     return (
       <div>
-        <h3>Top Up Balance (Demo)</h3>
-        <p style={{ fontSize: 12, color: '#777' }}>For demonstration and testing purposes only.</p>
+        <h3>{t('topup_title')}</h3>
+        <p style={{ fontSize: 12, color: '#777' }}>{t('topup_note')}</p>
         <form onSubmit={handleSubmit}>
-          <label>Amount (PKR)</label>
+          <label>{t('amount_pkr')}</label>
           <input type="number" required min="1" step="0.01" autoFocus placeholder="e.g., 10000" value={amount} onChange={e => setAmount(e.target.value)} />
           {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
-          <button type="submit" className="modal-btn-primary">ADD FUNDS</button>
+          <button type="submit" className="modal-btn-primary">{t('btn_add_funds')}</button>
         </form>
       </div>
     )
@@ -1226,6 +1726,57 @@ export default function Dashboard() {
     )
   }
 
+  // Reusable "pick one" control for the Send Money / Pay Bill step flows.
+  // options: [{ key, icon (fa class or emoji), label, sub? }]
+  // variant: 'grid' (icon boxes) | 'list' (full-width rows)
+  // columns: grid columns when variant === 'grid'
+  // compact: smaller boxes — for grids with 3+ options that don't need as
+  // much visual weight as a top-level "which flow" choice
+  function OptionGrid({ options, selected, onSelect, variant = 'grid', columns = 2, compact = false }) {
+    if (variant === 'list') {
+      return (
+        <div className="option-list">
+          {options.map(opt => (
+            <div
+              key={opt.key}
+              className={`option-list-item ${selected === opt.key ? 'selected' : ''}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect(opt.key)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(opt.key) }}
+            >
+              <div className="option-list-icon">
+                {opt.icon.startsWith('fa-') ? <i className={`fas ${opt.icon}`} /> : opt.icon}
+              </div>
+              <div className="option-list-label">{opt.label}</div>
+              <i className="fas fa-chevron-right option-list-chevron" />
+            </div>
+          ))}
+        </div>
+      )
+    }
+    return (
+      <div className={`option-grid ${compact ? 'compact' : ''}`} style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
+        {options.map(opt => (
+          <div
+            key={opt.key}
+            className={`option-card ${selected === opt.key ? 'selected' : ''}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(opt.key)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(opt.key) }}
+          >
+            <div className="option-card-icon">
+              {opt.icon.startsWith('fa-') ? <i className={`fas ${opt.icon}`} /> : opt.icon}
+            </div>
+            <div className="option-card-label">{opt.label}</div>
+            {opt.sub && <div className="option-card-sub">{opt.sub}</div>}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   function stepDots(current, total) {
     return (
       <div className="step-indicator">
@@ -1244,10 +1795,16 @@ export default function Dashboard() {
     switch (modal.type) {
       case 'sendMoney1': return <SendMoneyStep1 />
       case 'sendMoney2': return <SendMoneyStep2 />
-      case 'sendMoney3': return <SendMoneyStep3 txData={modal.txData} />
+      case 'sendMoney3': return <SendMoneyStep3 />
+      case 'sendMoney4': return <SendMoneyStep4 />
+      case 'sendMoney5': return <SendMoneyStep5 />
+      case 'sendMoney6': return <SendMoneyStep6 txData={modal.txData} />
       case 'payBill1':   return <PayBillStep1 />
-      case 'payBill2':   return <PayBillStep2 inlineError={modal.inlineError} />
-      case 'payBill3':   return <PayBillStep3 txData={modal.txData} />
+      case 'payBill2':   return <PayBillStep2 />
+      case 'payBill3':   return <PayBillStep3 inlineError={modal.inlineError} />
+      case 'payBill4':   return <PayBillStep4 inlineError={modal.inlineError} />
+      case 'payBill5':   return <PayBillStep5 inlineError={modal.inlineError} />
+      case 'payBill6':   return <PayBillStep6 txData={modal.txData} />
       case 'rewards':    return <RewardsInfo />
       case 'redeemPoints': return <RewardsRedeem message={modal.message} messageType={modal.messageType} />
       case 'productSelect': return <ProductSelect />
@@ -1266,7 +1823,6 @@ export default function Dashboard() {
             <p><strong>User ID:</strong> {userData.userId}</p>
             <p><strong>Balance:</strong> PKR {userData.balance.toLocaleString('en-PK')}</p>
             <p><strong>Reward Points:</strong> {userData.points}</p>
-            <p><strong>Email:</strong> {userData.email}</p>
           </div>
           <button className="modal-btn-primary" onClick={() => setModal(null)}>CLOSE</button>
         </div>
@@ -1405,39 +1961,39 @@ export default function Dashboard() {
       <div className="advisor-wrap">
         <div className="advisor-header">
           <div>
-            <h2 className="advisor-title">Your Analytics</h2>
-            <p className="advisor-subtitle">Your income, spending, and money habits — all in one place.</p>
+            <h2 className="advisor-title">{t('analytics_title')}</h2>
+            <p className="advisor-subtitle">{t('analytics_subtitle')}</p>
           </div>
-          <button className="topup-btn" onClick={() => setModal({ type: 'logIncome' })}>+ Log Income</button>
+          <button className="topup-btn" onClick={() => setModal({ type: 'logIncome' })}>{t('analytics_log_income')}</button>
         </div>
 
         <div className="advisor-grid">
           <div className="card advisor-summary-card">
             <div className="card-header-row">
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>This Month</h3>
+              <h3 style={{ marginTop: 0, marginBottom: 0 }}>{t('analytics_this_month')}</h3>
               {advisor.summaryAvailable && (
                 <button type="button" className="read-aloud-btn" aria-label="Read this month's summary aloud"
                   onClick={() => speak(`This month, your income is PKR ${income.toLocaleString('en-PK')}, your expenses are PKR ${expenses.toLocaleString('en-PK')}, and it is safe to spend PKR ${safeToSpend.toLocaleString('en-PK')} today.`)}>
-                  🔊 Read Aloud
+                  {t('read_aloud')}
                 </button>
               )}
             </div>
             {advisor.summaryAvailable ? (
               <div className="advisor-summary-row">
                 <div className="advisor-stat">
-                  <span className="advisor-stat-label">Income</span>
+                  <span className="advisor-stat-label">{t('analytics_income')}</span>
                   <strong className="advisor-stat-value income-text">PKR {income.toLocaleString('en-PK')}</strong>
                 </div>
                 <div className="advisor-stat">
-                  <span className="advisor-stat-label">Expenses</span>
+                  <span className="advisor-stat-label">{t('analytics_expenses')}</span>
                   <strong className="advisor-stat-value expense-text">PKR {expenses.toLocaleString('en-PK')}</strong>
                 </div>
                 <div className="advisor-stat">
-                  <span className="advisor-stat-label">Net</span>
+                  <span className="advisor-stat-label">{t('analytics_net')}</span>
                   <strong className={`advisor-stat-value ${net >= 0 ? 'income-text' : 'expense-text'}`}>PKR {net.toLocaleString('en-PK')}</strong>
                 </div>
                 <div className="advisor-stat">
-                  <span className="advisor-stat-label">Safe to Spend <InfoTip text={usingBackendSafeToSpend
+                  <span className="advisor-stat-label">{t('analytics_safe_to_spend')} <InfoTip text={usingBackendSafeToSpend
                     ? "What's left after income, minus expenses so far, minus a 20% savings target and a 10% investment amount — so spending today doesn't eat into money you're meant to be setting aside."
                     : "This is what's left after your income, minus your expenses so far and any bills still due — a rough amount you can spend today without dipping into money you already owe."} /></span>
                   <strong className={`advisor-stat-value ${safeToSpend >= 0 ? 'income-text' : 'expense-text'}`}>PKR {safeToSpend.toLocaleString('en-PK')}</strong>
@@ -1445,18 +2001,18 @@ export default function Dashboard() {
                 {usingBackendSafeToSpend && (
                   <>
                     <div className="advisor-stat">
-                      <span className="advisor-stat-label">Suggested Savings (20%)</span>
+                      <span className="advisor-stat-label">{t('analytics_suggested_savings')}</span>
                       <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {(advisor.summary.savings_target || 0).toLocaleString('en-PK')}</strong>
                     </div>
                     <div className="advisor-stat">
-                      <span className="advisor-stat-label">Suggested Investment (10%)</span>
+                      <span className="advisor-stat-label">{t('analytics_suggested_investment')}</span>
                       <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {(advisor.summary.investment_amount || 0).toLocaleString('en-PK')}</strong>
                     </div>
                   </>
                 )}
               </div>
             ) : (
-              <p className="advisor-empty">Income vs. expense tracking is coming online soon — this card will populate automatically once it's connected on the backend.</p>
+              <p className="advisor-empty">{t('analytics_summary_empty')}</p>
             )}
             {advisor.summaryAvailable && (
               <p className="advisor-footnote">
@@ -1467,19 +2023,13 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="card advisor-insights-card">
-            <h3 style={{ marginTop: 0 }}>AI Insights <span className="preview-tag">Preview</span></h3>
-            <div className="insight-item">💡 Insights like "your electricity bill is 20% higher than usual" will appear here once this panel is connected to the NLP engine.</div>
-            <div className="insight-item">📈 As you log income and expenses, FinBud AI will start suggesting a monthly savings target based on your habits.</div>
-          </div>
-
           <div className="card">
             <div className="card-header-row">
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Credit Score</h3>
+              <h3 style={{ marginTop: 0, marginBottom: 0 }}>{t('analytics_credit_score')}</h3>
               {advisor.creditScoreAvailable && (
                 <button type="button" className="read-aloud-btn" aria-label="Read credit score aloud"
                   onClick={() => speak(`Your credit score is ${advisor.creditScore.score}, rated ${advisor.creditScore.label}. ${advisor.creditScore.advice || ''}`)}>
-                  🔊 Read Aloud
+                  {t('read_aloud')}
                 </button>
               )}
             </div>
@@ -1495,7 +2045,7 @@ export default function Dashboard() {
                 {advisor.creditScore.breakdown && (
                   <div className="credit-breakdown-grid">
                     <div className="credit-breakdown-item">
-                      <span className="advisor-stat-label">Late Payments</span>
+                      <span className="advisor-stat-label">{t('analytics_late_payments')}</span>
                       <strong>{advisor.creditScore.breakdown.late_payments}</strong>
                     </div>
                     <div className="credit-breakdown-item">
@@ -1539,7 +2089,7 @@ export default function Dashboard() {
           </div>
 
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Monthly Trend</h3>
+            <h3 style={{ marginTop: 0 }}>{t('analytics_monthly_trend')}</h3>
             {advisor.trendAvailable && advisor.monthlyTrend.length > 0 ? (
               <div className="trend-chart">
                 {advisor.monthlyTrend.map(m => (
@@ -1559,12 +2109,12 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <p className="advisor-empty">Once a few months of data are in, you'll see your income vs. expense trend here.</p>
+              <p className="advisor-empty">{t('analytics_trend_empty')}</p>
             )}
           </div>
 
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Spending Pace</h3>
+            <h3 style={{ marginTop: 0 }}>{t('analytics_spending_pace')}</h3>
             {pctOfLastMonthSpent !== null ? (
               <>
                 <div className="pace-compare-row">
@@ -1600,12 +2150,12 @@ export default function Dashboard() {
                 </p>
               </>
             ) : (
-              <p className="advisor-empty">Once last month is complete, this will compare how fast you're spending this month against last month's total.</p>
+              <p className="advisor-empty">{t('analytics_pace_empty')}</p>
             )}
           </div>
 
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Income Sources</h3>
+            <h3 style={{ marginTop: 0 }}>{t('analytics_income_sources')}</h3>
             {advisor.incomeAvailable && incomeEntries.length > 0 ? (
               incomeEntries.map(([src, amt]) => {
                 const pct = incomeTotal > 0 ? (amt / incomeTotal) * 100 : 0
@@ -1617,14 +2167,14 @@ export default function Dashboard() {
                 )
               })
             ) : (
-              <p className="advisor-empty">No income logged yet — tap "+ Log Income" to add your first entry.</p>
+              <p className="advisor-empty">{t('analytics_income_empty')}</p>
             )}
           </div>
 
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Spending Breakdown</h3>
+            <h3 style={{ marginTop: 0 }}>{t('analytics_spending_breakdown')}</h3>
             {breakdownEntries.length === 0 ? (
-              <p className="advisor-empty">No spending yet — make a transfer or pay a bill to see your breakdown.</p>
+              <p className="advisor-empty">{t('analytics_breakdown_empty')}</p>
             ) : breakdownEntries.map(([cat, amt]) => {
               const pct = breakdownTotal > 0 ? ((amt / breakdownTotal) * 100) : 0
               return (
@@ -1644,20 +2194,20 @@ export default function Dashboard() {
           {simpleMode && !showMore ? (
             <div className="card advisor-insights-card">
               <button type="button" className="more-insights-btn" onClick={() => setShowMore(true)}>
-                Show More Insights (Subscriptions, Utility Usage, AI Tips) <i className="fas fa-chevron-down" style={{ marginLeft: 6 }} />
+                {t('analytics_show_more')} <i className="fas fa-chevron-down" style={{ marginLeft: 6 }} />
               </button>
             </div>
           ) : (
           <>
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Subscriptions & Recurring <span className="preview-tag">Preview</span></h3>
+            <h3 style={{ marginTop: 0 }}>{t('analytics_subscriptions')} <span className="preview-tag">{t('analytics_preview')}</span></h3>
             {advisor.subscriptions.length > 0 ? (
               <>
                 {advisor.subscriptions.map(sub => (
                   <div key={sub.description} className="wallet-row">
                     <div>
                       <strong>{sub.description}</strong>
-                      <div style={{ fontSize: 12, color: '#777' }}>Seen {sub.occurrences} times · consistent amount</div>
+                      <div style={{ fontSize: 12, color: isMobile ? 'var(--text-dark)' : '#777' }}>Seen {sub.occurrences} times · consistent amount</div>
                     </div>
                     <span>PKR {sub.amount.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</span>
                   </div>
@@ -1665,23 +2215,10 @@ export default function Dashboard() {
                 <p className="advisor-footnote">Detected recurring spend: PKR {subscriptionsTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}/month across your last 100 transactions.</p>
               </>
             ) : (
-              <p className="advisor-empty">No fixed-amount recurring charges detected yet in your recent transactions. Once you have a few repeat payments of the same amount (like a subscription), they'll show up here automatically.</p>
+              <p className="advisor-empty">{t('analytics_subscriptions_empty')}</p>
             )}
           </div>
 
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>Utility Usage</h3>
-            {advisor.utilityAvailable && advisor.utilityUsage ? (
-              <div className="breakdown-row">
-                <div className="breakdown-label-row">
-                  <span>{advisor.utilityUsage.label || 'Electricity'}</span>
-                  <strong>{advisor.utilityUsage.this_period} units vs {advisor.utilityUsage.last_period} last cycle</strong>
-                </div>
-              </div>
-            ) : (
-              <p className="advisor-empty">Unit-level utility tracking (like the K-Electric app — this month's units vs. the same billing cycle last year) is on the roadmap. Once a biller integration is connected, it'll show up here automatically.</p>
-            )}
-          </div>
           </>
           )}
         </div>
@@ -1705,68 +2242,68 @@ export default function Dashboard() {
       <div className="advisor-wrap">
         <div className="advisor-header">
           <div>
-            <h2 className="advisor-title">Wallet</h2>
-            <p className="advisor-subtitle">All your bank accounts and cards, linked in one place — like Google Pay or Apple Pay, but built for FinBud.</p>
+            <h2 className="advisor-title">{t('wallet_title')}</h2>
+            <p className="advisor-subtitle">{t('wallet_subtitle')}</p>
           </div>
         </div>
 
         <div className="advisor-grid">
           <div className="card advisor-summary-card">
             <div className="card-header-row">
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Net Worth</h3>
+              <h3 style={{ marginTop: 0, marginBottom: 0 }}>{t('wallet_net_worth')}</h3>
               <button type="button" className="read-aloud-btn" aria-label="Read net worth aloud"
                 onClick={() => speak(`Your total net worth is PKR ${netWorth.toLocaleString('en-PK')}. Your FinBud balance is PKR ${(userData.balance || 0).toLocaleString('en-PK')}.`)}>
-                🔊 Read Aloud
+                {t('read_aloud')}
               </button>
             </div>
             <div className="advisor-summary-row">
               <div className="advisor-stat">
-                <span className="advisor-stat-label">FinBud Balance</span>
+                <span className="advisor-stat-label">{t('wallet_finbud_balance')}</span>
                 <strong className="advisor-stat-value income-text">PKR {(userData.balance || 0).toLocaleString('en-PK')}</strong>
               </div>
               <div className="advisor-stat">
-                <span className="advisor-stat-label">Linked Accounts</span>
+                <span className="advisor-stat-label">{t('wallet_linked_accounts')}</span>
                 <strong className="advisor-stat-value">{wallet.linkedBanks.length > 0 ? `PKR ${linkedBalance.toLocaleString('en-PK')}` : '—'}</strong>
               </div>
               <div className="advisor-stat">
-                <span className="advisor-stat-label">Other Assets</span>
+                <span className="advisor-stat-label">{t('wallet_other_assets')}</span>
                 <strong className="advisor-stat-value">PKR {(wallet.otherAssets || 0).toLocaleString('en-PK')}</strong>
-                <button type="button" className="edit-assets-link" onClick={() => setModal({ type: 'editAssets' })}>Edit</button>
+                <button type="button" className="edit-assets-link" onClick={() => setModal({ type: 'editAssets' })}>{t('wallet_edit')}</button>
               </div>
               <div className="advisor-stat">
-                <span className="advisor-stat-label">Total Net Worth <InfoTip text="This adds up your FinBud balance, any linked bank accounts, and other assets you've told us about — a rough picture of everything you own through FinBud." /></span>
+                <span className="advisor-stat-label">{t('wallet_total_net_worth')} <InfoTip text="This adds up your FinBud balance, any linked bank accounts, and other assets you've told us about — a rough picture of everything you own through FinBud." /></span>
                 <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {netWorth.toLocaleString('en-PK')}</strong>
               </div>
             </div>
             {wallet.linkedBanks.length === 0 && (
-              <p className="advisor-footnote">Link a bank account below to have its balance count toward your net worth automatically.</p>
+              <p className="advisor-footnote">{t('wallet_link_note')}</p>
             )}
           </div>
 
           <div className="card">
             <div className="wallet-card-header">
-              <h3 style={{ margin: 0 }}>Linked Bank Accounts</h3>
-              <button className="topup-btn" onClick={() => setModal({ type: 'linkBank' })}>+ Link Account</button>
+              <h3 style={{ margin: 0 }}>{t('wallet_linked_bank_accounts')}</h3>
+              <button className="topup-btn" onClick={() => setModal({ type: 'linkBank' })}>{t('wallet_link_account')}</button>
             </div>
             {wallet.linkedBanksAvailable && wallet.linkedBanks.length > 0 ? (
               wallet.linkedBanks.map((acc, i) => (
                 <div key={i} className="wallet-row">
                   <div>
                     <strong>{acc.bank}</strong>
-                    <div style={{ fontSize: 12, color: '#777' }}>{acc.masked_iban || acc.iban}</div>
+                    <div style={{ fontSize: 12, color: isMobile ? 'var(--text-dark)' : '#777' }}>{acc.masked_iban || acc.iban}</div>
                   </div>
                   <span className="wallet-status-pill">{acc.status || 'Linked'}</span>
                 </div>
               ))
             ) : (
-              <p className="advisor-empty">No bank accounts linked yet. Link an HBL, Meezan, or any other Pakistani bank account to see its balance alongside your FinBud balance.</p>
+              <p className="advisor-empty">{t('wallet_no_banks')}</p>
             )}
           </div>
 
           <div className="card">
             <div className="wallet-card-header">
-              <h3 style={{ margin: 0 }}>My Cards</h3>
-              <button className="topup-btn" onClick={() => setModal({ type: 'addCard' })}>+ Add Card</button>
+              <h3 style={{ margin: 0 }}>{t('wallet_my_cards')}</h3>
+              <button className="topup-btn" onClick={() => setModal({ type: 'addCard' })}>{t('wallet_add_card')}</button>
             </div>
             {wallet.cards.length > 0 ? (
               wallet.cards.map(c => (
@@ -1778,14 +2315,8 @@ export default function Dashboard() {
                 </div>
               ))
             ) : (
-              <p className="advisor-empty">No cards on file yet. Add a card to enable the Emergency lock feature and start building your wallet.</p>
+              <p className="advisor-empty">{t('wallet_no_cards')}</p>
             )}
-          </div>
-
-          <div className="card advisor-insights-card">
-            <h3 style={{ marginTop: 0 }}>How This Works</h3>
-            <div className="insight-item">🏦 Bank accounts are linked through consent-based Open Banking APIs (per the State Bank of Pakistan's Open Banking framework and 1LINK's Open API Gateway) — FinBud never sees or stores your online banking password.</div>
-            <div className="insight-item">💳 Cards are stored using tokenization, the same approach Google Pay and Apple Pay use — your real card number is replaced with a token, so FinBud's servers never hold raw card data.</div>
           </div>
         </div>
       </div>
@@ -1830,6 +2361,13 @@ export default function Dashboard() {
           --income: #10b981;
           --expense: #ef4444;
           --warning: #f59e0b;
+          /* Locks form controls to light theming. Without this, mobile
+             browsers with auto-dark-mode on (default on most Android Chrome)
+             re-theme inputs independently of our CSS — background stays the
+             #fff we set below, but the browser injects its own light text
+             color for "dark mode", producing invisible white-on-white text
+             in Send Money / Pay Bill / every modal form. */
+          color-scheme: light;
         }
         html, body { margin:0; padding:0; width:100%; min-height:100vh; }
         #root { width:100%; min-height:100vh; display:block; }
@@ -1996,17 +2534,52 @@ export default function Dashboard() {
         .sidebar-nav a i { margin-right:15px; font-size:16px; width:20px; text-align:center; }
         .sidebar-footer { padding:20px; border-top:1px solid var(--secondary-purple); }
         .logout-btn { width:100%; background:var(--danger); color:#fff; padding:12px; border:none; border-radius:8px; cursor:pointer; font-weight:700; }
-        .sidebar-close-btn { position:absolute; top:15px; left:-40px; background:var(--primary-purple); color:#fff; border:none; border-radius:50%; width:30px; height:30px; font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
         .blurred { filter:blur(5px); transform:scale(0.98); pointer-events:none; }
         .modal-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter:blur(5px); display:flex; justify-content:center; align-items:center; z-index:300; }
         .modal-box { background:var(--card); padding:30px; border-radius:12px; width:min(90%,450px); position:relative; box-shadow:0 10px 30px rgba(0,0,0,0.2); max-height:85vh; overflow-y:auto; }
         .modal-close { position:absolute; top:10px; right:10px; background:none; border:none; font-size:24px; cursor:pointer; color:var(--primary-purple); }
         .modal-box h3 { margin-top:0; color:var(--primary-purple); font-size:22px; text-align:center; }
         .modal-box label { display:block; margin-top:15px; font-size:14px; font-weight:600; color:var(--primary-purple); text-align:left; }
-        .modal-box input, .modal-box select { width:100%; padding:10px; margin-top:5px; border:1px solid rgba(92,45,145,0.3); border-radius:6px; font-size:14px; background:#fff; }
+        .modal-box input, .modal-box select { width:100%; padding:10px; margin-top:5px; border:1px solid rgba(92,45,145,0.3); border-radius:6px; font-size:14px; background:#fff; color:var(--text-dark); }
         .modal-btn-primary { width:100%; padding:12px; margin-top:25px; background:var(--primary-purple); color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:700; text-transform:uppercase; font-size:14px; }
         .modal-btn-primary:disabled { opacity:0.6; cursor:not-allowed; }
         .modal-btn-secondary { width:100%; padding:12px; margin-top:10px; background:transparent; color:var(--primary-purple); border:2px solid var(--primary-purple); border-radius:6px; cursor:pointer; font-weight:700; text-transform:uppercase; font-size:14px; }
+
+        /* Icon-choice grid — used for the "pick one" steps of the Send
+           Money and Pay Bill modal flows (method, bill category, provider) */
+        .option-grid { display:grid; gap:12px; margin-top:6px; }
+        .option-card { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:20px 10px; background:var(--secondary-purple); border:2px solid transparent; border-radius:12px; cursor:pointer; text-align:center; transition:border-color .15s, transform .1s; }
+        .option-card:hover { border-color:var(--primary-purple); }
+        .option-card:active { transform:scale(0.98); }
+        .option-card.selected { border-color:var(--primary-purple); background:#fff; box-shadow:0 2px 10px rgba(92,45,145,0.15); }
+        .option-card-icon { width:44px; height:44px; border-radius:50%; background:var(--primary-purple); color:#fff; display:flex; align-items:center; justify-content:center; font-size:19px; }
+        .option-card-label { font-weight:700; font-size:14px; color:var(--text-dark); }
+        .option-card-sub { font-size:11px; color:#6b7280; margin-top:-4px; }
+        /* Compact variant — for grids of 3+ options (e.g. bill category)
+           that don't need the same visual weight as a top-level choice */
+        .option-grid.compact { gap:8px; }
+        .option-grid.compact .option-card { padding:12px 4px; gap:6px; border-radius:10px; }
+        .option-grid.compact .option-card-icon { width:32px; height:32px; font-size:14px; }
+        .option-grid.compact .option-card-label { font-size:12px; }
+        /* List variant — full-width rows, used for provider selection so
+           a category with many providers doesn't turn into a wall of boxes */
+        .option-list { display:flex; flex-direction:column; gap:8px; margin-top:6px; max-height:320px; overflow-y:auto; }
+        .option-list-item { display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--secondary-purple); border:2px solid transparent; border-radius:10px; cursor:pointer; transition:border-color .15s; }
+        .option-list-item:hover { border-color:var(--primary-purple); }
+        .option-list-item.selected { border-color:var(--primary-purple); background:#fff; box-shadow:0 2px 10px rgba(92,45,145,0.15); }
+        .option-list-icon { width:34px; height:34px; border-radius:50%; background:var(--primary-purple); color:#fff; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
+        .option-list-label { flex:1; text-align:left; font-weight:700; font-size:14px; color:var(--text-dark); }
+        .option-list-chevron { color:var(--primary-purple); opacity:0.55; font-size:12px; }
+        .identifier-type-toggle { display:flex; gap:8px; margin-top:6px; margin-bottom:4px; }
+        .identifier-type-toggle button { flex:1; padding:9px; border-radius:6px; border:2px solid var(--primary-purple); background:transparent; color:var(--primary-purple); font-weight:700; font-size:12.5px; cursor:pointer; text-transform:uppercase; }
+        .identifier-type-toggle button.active { background:var(--primary-purple); color:#fff; }
+        .option-grid-loading { text-align:center; padding:30px 0; color:#6b7280; font-size:13px; }
+        @media (max-width:420px) {
+          .option-grid.compact { gap:6px; }
+          .option-grid.compact .option-card { padding:10px 2px; }
+          .option-grid.compact .option-card-icon { width:28px; height:28px; font-size:12px; }
+          .option-grid.compact .option-card-label { font-size:10.5px; }
+        }
         .step-indicator { display:flex; align-items:center; gap:8px; margin:4px 0 20px; }
         .step-dot { width:26px; height:26px; border-radius:50%; background:var(--secondary-purple); color:var(--primary-purple); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; }
         .step-dot.done { background:var(--income); color:#fff; }
@@ -2139,7 +2712,7 @@ export default function Dashboard() {
         .goal-plan-btn { background:#fff; border:1.5px solid var(--secondary-purple); color:var(--primary-purple); }
         .goal-inline-form { margin-top:10px; padding:12px; background:#fff; border:1.5px dashed var(--secondary-purple); border-radius:8px; text-align:left; }
         .goal-inline-row { display:flex; gap:8px; margin-top:8px; }
-        .goal-inline-row select, .goal-inline-row input { flex:1; padding:8px 10px; border-radius:6px; border:1.5px solid var(--secondary-purple); font-size:13px; font-family:inherit; }
+        .goal-inline-row select, .goal-inline-row input { flex:1; padding:8px 10px; border-radius:6px; border:1.5px solid var(--secondary-purple); font-size:13px; font-family:inherit; color:var(--text-dark); background:#fff; }
         .goal-inline-row select:focus, .goal-inline-row input:focus { outline:none; border-color:var(--primary-purple); }
         .goal-type-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
         .goal-type-btn { display:flex; flex-direction:column; align-items:center; gap:8px; background:var(--secondary-purple); border:1.5px solid transparent; border-radius:10px; padding:16px 8px; font-size:12px; font-weight:600; color:var(--primary-purple); cursor:pointer; }
@@ -2147,7 +2720,7 @@ export default function Dashboard() {
         .goal-type-btn i { font-size:20px; }
         .goal-form { display:flex; flex-direction:column; gap:14px; }
         .goal-form label { display:flex; flex-direction:column; gap:6px; font-size:13px; font-weight:600; color:var(--primary-purple); text-align:left; }
-        .goal-form input { padding:10px 12px; border-radius:8px; border:1.5px solid var(--secondary-purple); font-size:14px; font-family:inherit; }
+        .goal-form input { padding:10px 12px; border-radius:8px; border:1.5px solid var(--secondary-purple); font-size:14px; font-family:inherit; color:var(--text-dark); background:#fff; }
         .goal-form input:focus { outline:none; border-color:var(--primary-purple); }
 
         .invest-type-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
@@ -2191,6 +2764,14 @@ export default function Dashboard() {
         .advisor-chat-popup-input-row input:focus { outline:none; box-shadow:0 0 0 3px rgba(92,45,145,0.15); }
         .advisor-chat-popup-input-row button { width:38px; height:38px; border-radius:50%; background:var(--primary-purple); color:#fff; border:none; cursor:pointer; flex-shrink:0; }
         .advisor-chat-popup-input-row button:disabled { opacity:0.5; cursor:default; }
+        /* Hands-free voice states for Fin's mic toggle: idle (on, not yet active) / listening (pulsing red) / processing (spinner) / speaking (waveform) */
+        .advisor-mic-btn { background:var(--secondary-purple); color:var(--primary-purple); font-size:13px; }
+        .advisor-mic-btn.idle { background:var(--primary-purple); color:#fff; }
+        .advisor-mic-btn.listening { background:var(--danger, #b91c1c); color:#fff; animation:advisorMicPulse 1.5s infinite; }
+        .advisor-mic-btn.processing { background:var(--primary-purple); color:#fff; }
+        .advisor-mic-btn.speaking { background:#15803d; color:#fff; animation:advisorMicSpeak 1.2s infinite; }
+        @keyframes advisorMicPulse { 0%{box-shadow:0 0 0 0 rgba(185,28,28,0.6)} 70%{box-shadow:0 0 0 8px rgba(185,28,28,0)} 100%{box-shadow:0 0 0 0 rgba(185,28,28,0)} }
+        @keyframes advisorMicSpeak { 0%{box-shadow:0 0 0 0 rgba(21,128,61,0.5)} 70%{box-shadow:0 0 0 8px rgba(21,128,61,0)} 100%{box-shadow:0 0 0 0 rgba(21,128,61,0)} }
 
         @media(max-width:900px) {
           .goal-type-grid{grid-template-columns:repeat(3, 1fr);}
@@ -2199,13 +2780,194 @@ export default function Dashboard() {
           .advisor-chat-sidepanel{width:100vw; max-width:100vw;}
           .advisor-chat-bubble-btn{right:16px; bottom:16px;}
         }
+
+        /* When the bottom tab bar is present (mobile-shell only), the Fin
+           bubble needs to sit above it rather than at bottom:16px, or it
+           overlaps the Wallet tab. .mobile-shell adds specificity so this
+           wins over the 900px rule above regardless of viewport width. */
+        .mobile-shell .advisor-chat-bubble-btn { bottom:92px; right:16px; }
+        .mobile-shell .advisor-greeting-bubble { bottom:172px; right:16px; max-width:calc(100vw - 48px); }
+        .mobile-shell .advisor-chat-sidepanel { bottom:76px; }
+           MOBILE SHELL — a genuinely different structure for phones,
+           not the desktop layout squeezed narrower. Same colors, fonts,
+           icons, and .card/.action-btn/.chat-card etc. building blocks
+           as desktop (untouched above), just reassembled with a bottom
+           tab bar and mobile-appropriate spacing/touch targets.
+           ══════════════════════════════════════════════════════════ */
+        .mobile-shell { display:flex; flex-direction:column; min-height:100vh; width:100%; background:var(--bg); padding-bottom:76px; }
+
+        .mobile-topbar { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px; background:var(--card); border-bottom:1px solid rgba(0,0,0,0.06); position:sticky; top:0; z-index:30; }
+        .mobile-topbar-brand { display:flex; align-items:center; gap:8px; }
+        .mobile-topbar-brand-text { font-size:18px; font-weight:700; color:var(--primary-purple); }
+        .mobile-topbar-actions { display:flex; align-items:center; gap:6px; }
+        .mobile-topbar-actions .bell-container { padding:6px; }
+        .mobile-topbar-actions .bell-container i { font-size:20px; }
+        .mobile-profile-avatar { width:34px; height:34px; font-size:13px; margin-left:4px; cursor:pointer; }
+
+        .lang-switcher { position:relative; }
+        .lang-switcher-btn { background:none; border:1.5px solid var(--primary-purple); color:var(--primary-purple); border-radius:20px; padding:6px 10px; font-size:11px; font-weight:700; display:flex; align-items:center; gap:5px; cursor:pointer; }
+        .lang-switcher-btn i { font-size:12px; }
+        .lang-switcher-menu { position:absolute; top:38px; right:0; background:var(--card); border-radius:10px; box-shadow:0 8px 20px rgba(0,0,0,0.15); z-index:1000; overflow:hidden; min-width:140px; }
+        .lang-switcher-menu button { display:block; width:100%; text-align:left; background:none; border:none; padding:12px 16px; font-size:14px; font-weight:600; color:var(--text-dark); cursor:pointer; }
+        .lang-switcher-menu button:hover { background:var(--secondary-purple); }
+        .lang-switcher-menu button.active { color:var(--primary-purple); background:rgba(92,45,145,0.08); }
+
+        /* Urdu script needs a Nastaliq-capable font — Inter has no Arabic-
+           script glyphs at all. Applied only when language==='ur'; layout
+           direction (flex/grid order) is left as-is, only the text font and
+           paragraph alignment shift — a full RTL mirror is a bigger,
+           separate change. */
+        .lang-ur, .lang-ur input, .lang-ur select, .lang-ur button {
+          font-family: 'Noto Nastaliq Urdu', Inter, ui-sans-serif, system-ui;
+        }
+        .lang-ur p, .lang-ur .advisor-empty, .lang-ur .advisor-footnote, .lang-ur label {
+          text-align: right;
+          line-height: 2;
+        }
+
+        .mobile-main { flex:1; width:100%; padding:16px; max-width:600px; margin:0 auto; box-sizing:border-box; }
+
+        /* Home */
+        .mobile-home-stack { display:flex; flex-direction:column; gap:16px; }
+        .mobile-main-balance-card { padding:22px 20px; }
+        .mobile-main-balance-card h2 { font-size:20px; margin-bottom:14px; }
+        .mobile-main-balance-card .balance-row { gap:12px; }
+        .balance-eye-btn { background:none; border:none; color:var(--primary-purple); font-size:22px; cursor:pointer; padding:4px 8px; line-height:1; }
+        .mobile-topup-btn { margin-left:auto; padding:8px 14px; font-size:12px; }
+        .mobile-quick-actions-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+        .mobile-quick-actions-grid .action-btn { padding:22px 10px; font-size:13px; border-radius:14px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+        .mobile-quick-actions-grid .action-btn i { font-size:20px; }
+        .mobile-chat-card { padding:18px 20px; border-radius:14px; }
+        .mobile-chat-card .chat-text { font-size:17px; }
+        .mobile-transactions-card { max-width:100%; padding:18px 16px; border-radius:14px; }
+        .mobile-transactions-card .tx-table { font-size:12.5px; }
+        .mobile-transactions-card .tx-table th, .mobile-transactions-card .tx-table td { padding:10px 0; }
+
+        /* Analytics / Financial Advisor / Wallet reuse .advisor-wrap and
+           .advisor-grid — collapse to one column with phone-sized padding */
+        .mobile-main .advisor-wrap { padding:0; max-width:none; }
+        .mobile-main .advisor-grid { grid-template-columns:1fr; gap:10px; }
+        .mobile-main .advisor-grid .card:not(.advisor-summary-card) { padding:14px 12px; }
+        .mobile-main .advisor-grid .card h3 { font-size:14px; }
+        .mobile-main .advisor-grid .advisor-stat-value { font-size:18px; }
+        .mobile-main .advisor-grid .advisor-stat-label { font-size:11px; }
+        .mobile-main .grow-money-grid { grid-template-columns:1fr; gap:14px; }
+        .mobile-main .advisor-header { flex-direction:column; align-items:stretch; gap:10px; }
+        .mobile-main .advisor-header .topup-btn { align-self:flex-start; }
+        .mobile-main .card { padding:18px 16px; border-radius:14px; }
+        .mobile-main .credit-breakdown-grid { grid-template-columns:1fr; }
+        .mobile-main .pace-compare-row { flex-direction:column; gap:10px; }
+
+        /* Card captions/labels/footnotes use a lighter gray on desktop for a
+           softer look, but that low contrast is hard to read on phone
+           screens — bump them up to the standard dark text on mobile only. */
+        .mobile-main .advisor-stat-label,
+        .mobile-main .advisor-empty,
+        .mobile-main .advisor-footnote,
+        .mobile-main .trend-label,
+        .mobile-main .pace-compare-label,
+        .mobile-main .checkin-back-btn,
+        .mobile-main .goal-withdraw-btn {
+          color: var(--text-dark);
+        }
+
+        /* Savings goal / investing type pickers — 4 compact boxes per row
+           on mobile instead of 2 oversized ones. */
+        .mobile-main .goal-type-grid,
+        .mobile-main .invest-type-grid {
+          grid-template-columns: repeat(4, 1fr);
+          gap: 8px;
+        }
+        .mobile-main .goal-type-btn,
+        .mobile-main .invest-type-btn {
+          padding: 12px 4px;
+          font-size: 10.5px;
+          gap: 6px;
+        }
+        .mobile-main .goal-type-btn i,
+        .mobile-main .invest-type-btn i {
+          font-size: 16px;
+        }
+
+        /* Bottom tab bar — thumb-reachable, replaces the left-nav sidebar */
+        .bottom-nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--card); border-top:1px solid rgba(0,0,0,0.08); box-shadow:0 -2px 12px rgba(0,0,0,0.06); z-index:250; padding-bottom:env(safe-area-inset-bottom, 0); }
+        .bottom-nav-btn { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; background:none; border:none; padding:9px 4px 8px; color:#9aa0ab; font-size:10.5px; font-weight:600; cursor:pointer; }
+        .bottom-nav-btn i { font-size:19px; }
+        .bottom-nav-btn.active { color:var(--primary-purple); }
+
+        /* Full-width dropdowns/sheets on phone screens instead of a fixed
+           350px box anchored near the edge (which can overflow the viewport) */
+        @media (max-width:520px) {
+          .reminders-dropdown { left:12px; right:12px; width:auto; top:64px; }
+          .toast-notification { left:12px; right:12px; max-width:none; top:64px; }
+        }
+
+        /* Modal on phones — kept centered on screen (matches desktop), just
+           sized to the viewport instead of docked as a bottom sheet */
+        @media (max-width:520px) {
+          .modal-overlay { align-items:center; padding:16px; box-sizing:border-box; }
+          .modal-box { width:100%; max-width:420px; border-radius:16px; max-height:85vh; padding:22px 18px 24px; }
+        }
       `}</style>
 
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap" />
 
       <div ref={printRef} className="receipt-print" />
 
-      <div className="app-shell">
+      {isMobile ? <MobileShell /> : <DesktopShell />}
+
+      <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)} />
+
+      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="sidebar-header">
+          <div className="profile-avatar" style={{ width: 60, height: 60, fontSize: 20 }}>{userData.initials}</div>
+          <span className="profile-name-large">{userData.name}</span>
+          <span className="user-id">{t('sidebar_user_id')}: {userData.userId}</span>
+          <button className="profile-switch-toggle" onClick={() => alert('Multi-profile support is on our roadmap.')}>{t('sidebar_switch_profile')} <i className="fas fa-chevron-down" /></button>
+        </div>
+        <ul className="sidebar-nav">
+          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'profileOverview' }) }}><i className="fas fa-user-circle" /> {t('sidebar_profile')}</a></li>
+          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'settings' }) }}><i className="fas fa-cog" /> {t('sidebar_settings')}</a></li>
+          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'security' }) }}><i className="fas fa-shield-alt" /> {t('sidebar_security')}</a></li>
+          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'financialReports' }) }}><i className="fas fa-chart-line" /> {t('sidebar_reports')}</a></li>
+        </ul>
+        {isMobile && (
+          // Text size control lives in the desktop left-nav sidebar, which
+          // doesn't render on mobile — surfaced here instead so the a11y
+          // feature stays reachable rather than silently disappearing.
+          <div className="text-size-control" style={{ borderTop: '1px solid var(--secondary-purple)', marginTop: 0 }}>
+            <span className="text-size-label">{t('text_size')}</span>
+            <div className="text-size-btns" role="group" aria-label="Adjust text size">
+              <button type="button" className={`text-size-btn ${fontSize === 'small' ? 'active' : ''}`}
+                aria-label="Small text" onClick={() => setFontSize('small')}>A-</button>
+              <button type="button" className={`text-size-btn ${fontSize === 'default' ? 'active' : ''}`}
+                aria-label="Default text size" onClick={() => setFontSize('default')}>A</button>
+              <button type="button" className={`text-size-btn ${fontSize === 'large' ? 'active' : ''}`}
+                aria-label="Large text" onClick={() => setFontSize('large')}>A+</button>
+            </div>
+          </div>
+        )}
+        <div className="sidebar-footer">
+          <button className="logout-btn" onClick={handleLogout}>{t('sidebar_logout')}</button>
+        </div>
+      </div>
+
+      {modal && (
+        <div className="modal-overlay" onClick={() => setModal(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <button className="modal-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
+            {renderModalContent()}
+          </div>
+        </div>
+      )}
+    </>
+  )
+
+  // ── DESKTOP SHELL (unchanged layout/behavior) ────────────
+  function DesktopShell() {
+    return (
+    <div className={`app-shell ${language === 'ur' ? 'lang-ur' : ''}`}>
         <nav className="left-nav">
           <div className="left-nav-brand">
             <span className="logo-circle">AI</span>
@@ -2213,21 +2975,21 @@ export default function Dashboard() {
           </div>
           <ul className="left-nav-list">
             <li className={activeView === 'home' ? 'active' : ''} onClick={() => { setActiveView('home'); setRemindersOpen(false); setTxNotifOpen(false) }}>
-              <i className="fas fa-home" /> <span>Home</span>
+              <i className="fas fa-home" /> <span>{t('nav_home')}</span>
             </li>
             <li className={activeView === 'advisor' ? 'active' : ''} onClick={() => { setActiveView('advisor'); setRemindersOpen(false); setTxNotifOpen(false) }}>
-              <i className="fas fa-chart-pie" /> <span>Your Analytics</span>
+              <i className="fas fa-chart-pie" /> <span>{t('nav_your_analytics')}</span>
             </li>
             <li className={activeView === 'growmymoney' ? 'active' : ''} onClick={() => { setActiveView('growmymoney'); setRemindersOpen(false); setTxNotifOpen(false) }}>
-              <i className="fas fa-piggy-bank" /> <span>Financial Advisor</span>
+              <i className="fas fa-piggy-bank" /> <span>{t('nav_financial_advisor')}</span>
             </li>
             <li className={activeView === 'wallet' ? 'active' : ''} onClick={() => { setActiveView('wallet'); setRemindersOpen(false); setTxNotifOpen(false) }}>
-              <i className="fas fa-wallet" /> <span>Wallet</span>
+              <i className="fas fa-wallet" /> <span>{t('nav_wallet')}</span>
             </li>
           </ul>
 
           <div className="text-size-control">
-            <span className="text-size-label">Text Size</span>
+            <span className="text-size-label">{t('text_size')}</span>
             <div className="text-size-btns" role="group" aria-label="Adjust text size">
               <button type="button" className={`text-size-btn ${fontSize === 'small' ? 'active' : ''}`}
                 aria-label="Small text" onClick={() => setFontSize('small')}>A-</button>
@@ -2261,9 +3023,9 @@ export default function Dashboard() {
 
             {txNotifOpen && (
               <div className="reminders-dropdown activity-dropdown" onClick={e => e.stopPropagation()}>
-                <h3><i className="fas fa-receipt" /> Transaction Activity</h3>
+                <h3><i className="fas fa-receipt" /> {t('bell_activity')}</h3>
                 {notifications.length === 0
-                  ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>No activity yet</p>
+                  ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>{t('bell_no_activity')}</p>
                   : notifications.map(n => (
                     <div key={n.id} className={`reminder-item activity-item ${n.is_read ? '' : 'activity-unread'}`}>
                       <div style={{ fontSize: 13.5 }}>{n.message}</div>
@@ -2275,7 +3037,7 @@ export default function Dashboard() {
 
             {remindersOpen && (
               <div className="reminders-dropdown" onClick={e => e.stopPropagation()}>
-                <h3><i className="fas fa-bell" /> Bill Reminders</h3>
+                <h3><i className="fas fa-bell" /> {t('bell_bill_reminders')}</h3>
                 {reminders.map((r, i) => {
                   const daysText = r.days_left === 0 ? 'Due Today' : r.days_left < 0 ? `${Math.abs(r.days_left)} days overdue` : `Due in ${r.days_left} day${r.days_left > 1 ? 's' : ''}`
                   return (
@@ -2301,34 +3063,34 @@ export default function Dashboard() {
               <main className="dashboard-grid" onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
                 <section className="column-left">
                   <div className="main-balance-card">
-                    <h2>Hello, {userData.name}!</h2>
-                    <p className="balance-label">YOUR BALANCE:</p>
+                    <h2>{t('home_hello')}, {userData.name}!</h2>
+                    <p className="balance-label">{t('home_your_balance')}</p>
                     <div className="balance-row">
                       <span className="currency">PKR</span>
                       <strong className="balance-value">{userData.isMasked ? '*****' : formattedBalance}</strong>
-                      <button className="sign-up-btn" onClick={() => userData.isMasked ? setModal({ type: 'verifyBalance' }) : setUserData(u => ({ ...u, isMasked: true }))}>
-                        {userData.isMasked ? 'SHOW BALANCE' : 'HIDE BALANCE'}
+                      <button className="sign-up-btn" onClick={() => setUserData(u => ({ ...u, isMasked: !u.isMasked }))}>
+                        {userData.isMasked ? t('home_show_balance') : t('home_hide_balance')}
                       </button>
-                      <button className="topup-btn" onClick={() => setModal({ type: 'topup' })}>+ Top Up</button>
+                      <button className="topup-btn" onClick={() => setModal({ type: 'topup' })}>{t('home_topup')}</button>
                     </div>
                   </div>
 
                   <div className="quick-actions-grid">
-                    <button className="action-btn" onClick={() => setModal({ type: 'sendMoney1' })}>SEND MONEY</button>
-                    <button className="action-btn" onClick={() => setModal({ type: 'payBill1' })}>PAY BILL</button>
-                    <button className="action-btn" onClick={() => setModal({ type: 'rewards' })}>REWARDS</button>
-                    <button className="action-btn" onClick={() => setModal({ type: 'redeemPoints' })}>REDEEM POINTS</button>
+                    <button className="action-btn" onClick={() => { setPendingTransfer(null); setModal({ type: 'sendMoney1' }) }}>{t('action_send_money')}</button>
+                    <button className="action-btn" onClick={() => { setPendingBill(null); setModal({ type: 'payBill1' }) }}>{t('action_pay_bill')}</button>
+                    <button className="action-btn" onClick={() => setModal({ type: 'rewards' })}>{t('action_rewards')}</button>
+                    <button className="action-btn" onClick={() => setModal({ type: 'redeemPoints' })}>{t('action_redeem_points')}</button>
                   </div>
                 </section>
 
                 <section className="column-right">
                   <button className="chat-card" onClick={() => navigate('/chat')}>
-                    <div className="chat-text">Chat With <br /> Your AI Assistant</div>
+                    <div className="chat-text">{t('chat_line1')} <br /> {t('chat_line2')}</div>
                     <span style={{ fontSize: 30, fontWeight: 900 }}>→</span>
                   </button>
 
                   <div className="transactions-card">
-                    <h3>Recent Transactions <i className="fas fa-chevron-down" style={{ fontSize: 18, marginLeft: 5 }} /></h3>
+                    <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 18, marginLeft: 5 }} /></h3>
                     <table className="tx-table">
                       <colgroup>
                         <col style={{ width: '26%' }} />
@@ -2336,10 +3098,10 @@ export default function Dashboard() {
                         <col style={{ width: '24%' }} />
                         <col style={{ width: '10%' }} />
                       </colgroup>
-                      <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th /></tr></thead>
+                      <thead><tr><th>{t('tx_date')}</th><th>{t('tx_type')}</th><th>{t('tx_amount')}</th><th /></tr></thead>
                       <tbody>
                         {transactions.length === 0
-                          ? <tr><td colSpan={4} style={{ textAlign: 'center', color: '#999' }}>No transactions yet</td></tr>
+                          ? <tr><td colSpan={4} style={{ textAlign: 'center', color: '#999' }}>{t('tx_empty')}</td></tr>
                           : transactions.map((tx, i) => {
                             const menuId = tx.id ?? `idx-${i}`
                             return (
@@ -2351,7 +3113,7 @@ export default function Dashboard() {
                                   <div className="tx-menu-wrap">
                                     <button className="tx-menu-btn" aria-label={`Options for ${tx.description}`} onClick={e => { e.stopPropagation(); setOpenMenuId(openMenuId === menuId ? null : menuId) }}>⋯</button>
                                     <div className={`tx-menu-dropdown ${openMenuId === menuId ? 'open' : ''}`}>
-                                      <a onClick={() => { setOpenMenuId(null); downloadReceipt(tx.id) }}>Download Receipt</a>
+                                      <a onClick={() => { setOpenMenuId(null); downloadReceipt(tx.id) }}>{t('tx_download_receipt')}</a>
                                     </div>
                                   </div>
                                 </td>
@@ -2378,37 +3140,177 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-      </div>
+    </div>
+    )
+  }
 
-      <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)} />
-
-      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <button className="sidebar-close-btn" aria-label="Close menu" onClick={() => setSidebarOpen(false)}>×</button>
-        <div className="sidebar-header">
-          <div className="profile-avatar" style={{ width: 60, height: 60, fontSize: 20 }}>{userData.initials}</div>
-          <span className="profile-name-large">{userData.name}</span>
-          <span className="user-id">User ID: {userData.userId}</span>
-          <button className="profile-switch-toggle" onClick={() => alert('Multi-profile support is on our roadmap.')}>Switch Profile <i className="fas fa-chevron-down" /></button>
-        </div>
-        <ul className="sidebar-nav">
-          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'profileOverview' }) }}><i className="fas fa-user-circle" /> Profile Overview</a></li>
-          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'settings' }) }}><i className="fas fa-cog" /> Settings</a></li>
-          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'security' }) }}><i className="fas fa-shield-alt" /> Security Center</a></li>
-          <li><a onClick={() => { setSidebarOpen(false); setModal({ type: 'financialReports' }) }}><i className="fas fa-chart-line" /> Financial Reports</a></li>
-        </ul>
-        <div className="sidebar-footer">
-          <button className="logout-btn" onClick={handleLogout}>LOG OUT</button>
-        </div>
-      </div>
-
-      {modal && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <button className="modal-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
-            {renderModalContent()}
+  // ── MOBILE SHELL ──────────────────────────────────────────
+  // Structurally different from desktop: sticky compact topbar, bottom
+  // tab bar instead of a left sidebar, and single-column stacked cards.
+  // Reuses the same sub-view functions (FinancialAdvisorView, WalletView,
+  // GrowMyMoneyView) and the same shared state/handlers as the desktop
+  // shell — only the arrangement differs, so Send Money, Pay Bill, and
+  // every other action behave identically on either shell.
+  function MobileShell() {
+    const viewTitle = activeView === 'home' ? t('topbar_dashboard') : activeView === 'advisor' ? t('nav_your_analytics') : activeView === 'growmymoney' ? t('nav_financial_advisor') : t('nav_wallet')
+    const LANG_LABELS = { en: 'EN', ur: 'اردو', roman: 'Roman' }
+    return (
+      <div className={`mobile-shell ${language === 'ur' ? 'lang-ur' : ''}`}>
+        <header className="mobile-topbar">
+          <div className="mobile-topbar-brand">
+            <span className="logo-circle">AI</span>
+            <span className="mobile-topbar-brand-text">{activeView === 'home' ? 'FinBud' : viewTitle}</span>
           </div>
-        </div>
-      )}
-    </>
-  )
+          <div className="mobile-topbar-actions">
+            <div className="lang-switcher">
+              <button type="button" className="lang-switcher-btn" aria-label={t('language')} onClick={() => setLangMenuOpen(o => !o)}>
+                <i className="fas fa-globe" /> {LANG_LABELS[language]}
+              </button>
+              {langMenuOpen && (
+                <div className="lang-switcher-menu" onClick={e => e.stopPropagation()}>
+                  <button type="button" className={language === 'en' ? 'active' : ''} onClick={() => { setLanguage('en'); setLangMenuOpen(false) }}>English</button>
+                  <button type="button" className={language === 'ur' ? 'active' : ''} onClick={() => { setLanguage('ur'); setLangMenuOpen(false) }}>اردو</button>
+                  <button type="button" className={language === 'roman' ? 'active' : ''} onClick={() => { setLanguage('roman'); setLangMenuOpen(false) }}>Roman Urdu</button>
+                </div>
+              )}
+            </div>
+            <div className="bell-container" role="button" tabIndex={0} aria-label={`${notifUnreadCount} unread notifications`} onClick={openNotifications}>
+              <i className="fas fa-receipt" />
+              {notifUnreadCount > 0 && <span className="reminder-badge activity-badge">{notifUnreadCount}</span>}
+            </div>
+            <div className="bell-container" role="button" tabIndex={0} aria-label={`Bill reminders, ${reminders.length} pending`} onClick={() => setRemindersOpen(o => !o)}>
+              <i className="fas fa-bell" />
+              {reminders.length > 0 && <span className="reminder-badge">{reminders.length}</span>}
+            </div>
+            <div className="profile-avatar mobile-profile-avatar" role="button" tabIndex={0} aria-label="Open account menu" onClick={() => setSidebarOpen(true)}>
+              {userData.initials}
+            </div>
+          </div>
+        </header>
+
+        {txNotifOpen && (
+          <div className="reminders-dropdown activity-dropdown" onClick={e => e.stopPropagation()}>
+            <h3><i className="fas fa-receipt" /> {t('bell_activity')}</h3>
+            {notifications.length === 0
+              ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>{t('bell_no_activity')}</p>
+              : notifications.map(n => (
+                <div key={n.id} className={`reminder-item activity-item ${n.is_read ? '' : 'activity-unread'}`}>
+                  <div style={{ fontSize: 13.5 }}>{n.message}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>{new Date(n.created_at).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+                </div>
+              ))}
+          </div>
+        )}
+
+        {remindersOpen && (
+          <div className="reminders-dropdown" onClick={e => e.stopPropagation()}>
+            <h3><i className="fas fa-bell" /> {t('bell_bill_reminders')}</h3>
+            {reminders.length === 0
+              ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>{t('bell_no_bills')}</p>
+              : reminders.map((r, i) => {
+                const daysText = r.days_left === 0 ? 'Due Today' : r.days_left < 0 ? `${Math.abs(r.days_left)} days overdue` : `Due in ${r.days_left} day${r.days_left > 1 ? 's' : ''}`
+                return (
+                  <div key={i} className={`reminder-item ${r.kind}`}>
+                    <div style={{ fontWeight: 600 }}>{r.biller}</div>
+                    <div style={{ fontWeight: 700, color: 'var(--primary-purple)' }}>PKR {r.amount.toLocaleString('en-PK')}</div>
+                    <div style={{ fontSize: 12, marginTop: 4 }}>{daysText}</div>
+                  </div>
+                )
+              })}
+          </div>
+        )}
+
+        <main className="mobile-main" onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
+          {activeView === 'home' ? (
+            <div className="mobile-home-stack">
+              <div className="main-balance-card mobile-main-balance-card">
+                <h2>{t('home_hello')}, {userData.name}!</h2>
+                <p className="balance-label">{t('home_your_balance')}</p>
+                <div className="balance-row">
+                  <span className="currency">PKR</span>
+                  <strong className="balance-value">{userData.isMasked ? '*****' : formattedBalance}</strong>
+                  <button
+                    className="balance-eye-btn"
+                    aria-label={userData.isMasked ? 'Show balance' : 'Hide balance'}
+                    onClick={() => setUserData(u => ({ ...u, isMasked: !u.isMasked }))}
+                  >
+                    <i className={`fas ${userData.isMasked ? 'fa-eye' : 'fa-eye-slash'}`} />
+                  </button>
+                  <button className="topup-btn mobile-topup-btn" onClick={() => setModal({ type: 'topup' })}>{t('home_topup')}</button>
+                </div>
+              </div>
+
+              <div className="mobile-quick-actions-grid">
+                <button className="action-btn" onClick={() => { setPendingTransfer(null); setModal({ type: 'sendMoney1' }) }}><i className="fas fa-paper-plane" /><span>{t('action_send_money')}</span></button>
+                <button className="action-btn" onClick={() => { setPendingBill(null); setModal({ type: 'payBill1' }) }}><i className="fas fa-file-invoice-dollar" /><span>{t('action_pay_bill')}</span></button>
+                <button className="action-btn" onClick={() => setModal({ type: 'rewards' })}><i className="fas fa-gift" /><span>{t('action_rewards')}</span></button>
+                <button className="action-btn" onClick={() => setModal({ type: 'redeemPoints' })}><i className="fas fa-coins" /><span>{t('action_redeem_points')}</span></button>
+              </div>
+
+              <button className="chat-card mobile-chat-card" onClick={() => navigate('/chat')}>
+                <div className="chat-text">{t('chat_line1')} <br /> {t('chat_line2')}</div>
+                <span style={{ fontSize: 26, fontWeight: 900 }}>→</span>
+              </button>
+
+              <div className="transactions-card mobile-transactions-card">
+                <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 16, marginLeft: 5 }} /></h3>
+                <table className="tx-table">
+                  <colgroup>
+                    <col style={{ width: '26%' }} />
+                    <col style={{ width: '40%' }} />
+                    <col style={{ width: '24%' }} />
+                    <col style={{ width: '10%' }} />
+                  </colgroup>
+                  <thead><tr><th>{t('tx_date')}</th><th>{t('tx_type')}</th><th>{t('tx_amount')}</th><th /></tr></thead>
+                  <tbody>
+                    {transactions.length === 0
+                      ? <tr><td colSpan={4} style={{ textAlign: 'center', color: '#999' }}>{t('tx_empty')}</td></tr>
+                      : transactions.map((tx, i) => {
+                        const menuId = tx.id ?? `idx-${i}`
+                        return (
+                          <tr key={menuId}>
+                            <td>{tx.date}</td>
+                            <td className="tx-desc-cell" title={getTransactionDisplayLabel(tx)}>{getTransactionDisplayLabel(tx)}</td>
+                            <td className={tx.amount < 0 ? 'expense-text' : 'income-text'}>PKR {Math.abs(tx.amount).toLocaleString('en-PK')}</td>
+                            <td>
+                              <div className="tx-menu-wrap">
+                                <button className="tx-menu-btn" aria-label={`Options for ${tx.description}`} onClick={e => { e.stopPropagation(); setOpenMenuId(openMenuId === menuId ? null : menuId) }}>⋯</button>
+                                <div className={`tx-menu-dropdown ${openMenuId === menuId ? 'open' : ''}`}>
+                                  <a onClick={() => { setOpenMenuId(null); downloadReceipt(tx.id) }}>{t('tx_download_receipt')}</a>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : activeView === 'advisor' ? (
+            <FinancialAdvisorView />
+          ) : activeView === 'growmymoney' ? (
+            <GrowMyMoneyView />
+          ) : (
+            <WalletView />
+          )}
+        </main>
+
+        <nav className="bottom-nav">
+          <button className={`bottom-nav-btn ${activeView === 'home' ? 'active' : ''}`} onClick={() => { setActiveView('home'); setRemindersOpen(false); setTxNotifOpen(false) }}>
+            <i className="fas fa-home" /><span>{t('nav_home')}</span>
+          </button>
+          <button className={`bottom-nav-btn ${activeView === 'advisor' ? 'active' : ''}`} onClick={() => { setActiveView('advisor'); setRemindersOpen(false); setTxNotifOpen(false) }}>
+            <i className="fas fa-chart-pie" /><span>{t('nav_analytics')}</span>
+          </button>
+          <button className={`bottom-nav-btn ${activeView === 'growmymoney' ? 'active' : ''}`} onClick={() => { setActiveView('growmymoney'); setRemindersOpen(false); setTxNotifOpen(false) }}>
+            <i className="fas fa-piggy-bank" /><span>{t('nav_advisor')}</span>
+          </button>
+          <button className={`bottom-nav-btn ${activeView === 'wallet' ? 'active' : ''}`} onClick={() => { setActiveView('wallet'); setRemindersOpen(false); setTxNotifOpen(false) }}>
+            <i className="fas fa-wallet" /><span>{t('nav_wallet')}</span>
+          </button>
+        </nav>
+      </div>
+    )
+  }
 }
