@@ -57,12 +57,16 @@ def _scrub_context_for_log(ctx: dict) -> dict:
 
 class FlowState(Enum):
     IDLE = auto()
-    TRANSFER_AWAIT_AMOUNT = auto()
     TRANSFER_AWAIT_RECIPIENT = auto()
-    TRANSFER_AWAIT_ACCOUNT = auto()
+    TRANSFER_AWAIT_METHOD = auto()
+    TRANSFER_AWAIT_IDENTIFIER = auto()
+    TRANSFER_AWAIT_AMOUNT = auto()
+    TRANSFER_AWAIT_PURPOSE = auto()
+    TRANSFER_AWAIT_DESCRIPTION = auto()
     TRANSFER_AWAIT_CONFIRMATION = auto()
     TRANSFER_AWAIT_PASSWORD = auto()
-    BILL_AWAIT_TYPE = auto()
+    BILL_AWAIT_CATEGORY = auto()
+    BILL_AWAIT_PROVIDER = auto()
     BILL_AWAIT_REFERENCE = auto()
     BILL_AWAIT_AMOUNT = auto()
     BILL_AWAIT_CONFIRMATION = auto()
@@ -76,11 +80,15 @@ class FlowState(Enum):
 # in session['conversation_context']['current_flow']. Kept as a single
 # source of truth so the new engine and the old session shape never drift.
 FLOW_STATE_TO_LEGACY_FLOW = {
-    FlowState.TRANSFER_AWAIT_AMOUNT: 'transfer_money',
     FlowState.TRANSFER_AWAIT_RECIPIENT: 'transfer_money',
-    FlowState.TRANSFER_AWAIT_ACCOUNT: 'transfer_money',
+    FlowState.TRANSFER_AWAIT_METHOD: 'transfer_money',
+    FlowState.TRANSFER_AWAIT_IDENTIFIER: 'transfer_money',
+    FlowState.TRANSFER_AWAIT_AMOUNT: 'transfer_money',
+    FlowState.TRANSFER_AWAIT_PURPOSE: 'transfer_money',
+    FlowState.TRANSFER_AWAIT_DESCRIPTION: 'transfer_money',
     FlowState.TRANSFER_AWAIT_CONFIRMATION: 'transfer_money',
-    FlowState.BILL_AWAIT_TYPE: 'pay_bill',
+    FlowState.BILL_AWAIT_CATEGORY: 'pay_bill',
+    FlowState.BILL_AWAIT_PROVIDER: 'pay_bill',
     FlowState.BILL_AWAIT_REFERENCE: 'pay_bill',
     FlowState.BILL_AWAIT_AMOUNT: 'pay_bill',
     FlowState.BILL_AWAIT_CONFIRMATION: 'pay_bill',
@@ -90,10 +98,14 @@ FLOW_STATE_TO_LEGACY_FLOW = {
 # The ordered slot sequence for each flow: given a FlowState, this defines
 # which slot is being filled and what state to move to once it's filled.
 # Order matters - it's also what the edit-previous-step utility walks
-# backwards over.
+# backwards over. This mirrors the fields collected by the app's
+# transfer-money / pay-bill forms.
 FLOW_SLOT_ORDER = {
-    'transfer_money': ['amount', 'recipient', 'account_number'],
-    'pay_bill': ['bill_type', 'bill_reference', 'amount'],
+    'transfer_money': [
+        'recipient', 'transfer_method', 'transfer_identifier',
+        'amount', 'purpose', 'description',
+    ],
+    'pay_bill': ['bill_category', 'service_provider', 'bill_reference', 'amount'],
 }
 
 # State that immediately precedes "confirmation" for each flow - i.e. the
@@ -107,10 +119,14 @@ FLOW_CONFIRMATION_STATE = {
 # keyed by (flow, slot_name). Used by the edit-previous-step utility to
 # know which state to rewind into after clearing a slot.
 FLOW_SLOT_STATE = {
-    ('transfer_money', 'amount'): FlowState.TRANSFER_AWAIT_AMOUNT,
     ('transfer_money', 'recipient'): FlowState.TRANSFER_AWAIT_RECIPIENT,
-    ('transfer_money', 'account_number'): FlowState.TRANSFER_AWAIT_ACCOUNT,
-    ('pay_bill', 'bill_type'): FlowState.BILL_AWAIT_TYPE,
+    ('transfer_money', 'transfer_method'): FlowState.TRANSFER_AWAIT_METHOD,
+    ('transfer_money', 'transfer_identifier'): FlowState.TRANSFER_AWAIT_IDENTIFIER,
+    ('transfer_money', 'amount'): FlowState.TRANSFER_AWAIT_AMOUNT,
+    ('transfer_money', 'purpose'): FlowState.TRANSFER_AWAIT_PURPOSE,
+    ('transfer_money', 'description'): FlowState.TRANSFER_AWAIT_DESCRIPTION,
+    ('pay_bill', 'bill_category'): FlowState.BILL_AWAIT_CATEGORY,
+    ('pay_bill', 'service_provider'): FlowState.BILL_AWAIT_PROVIDER,
     ('pay_bill', 'bill_reference'): FlowState.BILL_AWAIT_REFERENCE,
     ('pay_bill', 'amount'): FlowState.BILL_AWAIT_AMOUNT,
 }
@@ -501,30 +517,45 @@ RESPONSES = {
         'ur': "آپ کا بیلنس \u2066RS {balance:,}\u2069 ہے",
         'ru': "Aap ka balance RS {balance:,} hai"
     },
-    'transfer_ask_amount': {
-        'en': "How much would you like to transfer?",
-        'ur': "💰 آپ کتنی رقم منتقل کرنا چاہتے ہیں؟",
-        'ru': "Aap kitni raqam transfer karna chahte hain?"
-    },
     'transfer_ask_recipient_name': {
-        'en': "👤 Who would you like to send RS {amount:,} to? Please provide their name.",
-        'ur': "👤 \u200Fآپ \u2066RS {amount:,}\u2069 کسے بھیجنا چاہتے ہیں؟ براۓ کرم ان کا نام فراہم کریں۔",
-        'ru': "👤 Aap RS {amount:,} kise bhejna chahte hain? Unka naam provide karein."
+        'en': "👤 Who would you like to send money to? Please provide their name.",
+        'ur': "👤 آپ کسے پیسے بھیجنا چاہتے ہیں؟ براۓ کرم ان کا نام فراہم کریں۔",
+        'ru': "👤 Aap kise paisa bhejna chahte hain? Unka naam provide karein."
     },
-    'transfer_ask_account': {
-        'en': "Please provide the account number for {recipient}.",
-        'ur': "🔢 \u200Fبراۓ کرم \u2066{recipient}\u2069 کا اکاؤنٹ نمبر فراہم کریں۔",
-        'ru': "{recipient} ka account number provide karein."
+    'transfer_ask_method': {
+        'en': "How would you like to send the money? Please choose: IBAN, Account Number, or Raast ID.",
+        'ur': "🏦 \u200Fآپ \u2066{recipient}\u2069 کو کس طریقے سے پیسے بھیجنا چاہتے ہیں؟ IBAN، Account Number، یا Raast ID میں سے چنیں۔",
+        'ru': "🏦 Aap kis tareeqe se paisa bhejna chahte hain? IBAN, Account Number, ya Raast ID mein se chunein."
     },
-    'transfer_invalid_account': {
-        'en': "❌ Invalid account number. Please provide a valid account number(eg; ABC12345678).",
-        'ur': "❌ غلط اکاؤنٹ نمبر۔ براۓ کرم ایک درست اکاؤنٹ نمبر فراہم کریں۔",
-        'ru': "❌ Ghalat account number. Brahe karam ek durust account number provide karein(maslan; ABC12345678)."
+    'transfer_ask_identifier': {
+        'en': "Please provide the {transfer_method} for {recipient}.",
+        'ur': "🔢 \u200Fبراۓ کرم \u2066{recipient}\u2069 کا \u2066{transfer_method}\u2069 فراہم کریں۔",
+        'ru': "{recipient} ka {transfer_method} provide karein."
+    },
+    'transfer_invalid_identifier': {
+        'en': "❌ That doesn't look like a valid IBAN, account number, or Raast ID. Please try again (e.g. account number ABC12345678).",
+        'ur': "❌ یہ درست IBAN، اکاؤنٹ نمبر، یا Raast ID نہیں لگتا۔ براۓ کرم دوبارہ کوشش کریں۔",
+        'ru': "❌ Yeh valid IBAN, account number, ya Raast ID nahi lagta. Dobara koshish karein (maslan account number ABC12345678)."
+    },
+    'transfer_ask_amount': {
+        'en': "How much would you like to transfer to {recipient}?",
+        'ur': "💰 \u200Fآپ \u2066{recipient}\u2069 کو کتنی رقم منتقل کرنا چاہتے ہیں؟",
+        'ru': "Aap {recipient} ko kitni raqam transfer karna chahte hain?"
+    },
+    'transfer_ask_purpose': {
+        'en': "What's the purpose of this transfer? (Rent, Salary, Business, Personal, or Other)",
+        'ur': "📋 اس ٹرانسفر کا مقصد کیا ہے؟ (Rent، Salary، Business، Personal، یا Other)",
+        'ru': "Is transfer ka purpose kya hai? (Rent, Salary, Business, Personal, ya Other)"
+    },
+    'transfer_ask_description': {
+        'en': "Any specific category for this transfer (e.g. Grocery, Rent, Utility Bills)? You can also just say \"skip\" to use \"Transfer\".",
+        'ur': "کیا اس ٹرانسفر کے لیے کوئی مخصوص کیٹیگری ہے؟ چھوڑنے کے لیے \"skip\" لکھیں۔",
+        'ru': "Is transfer ke liye koi specific category hai (maslan Grocery, Rent)? Skip karne ke liye \"skip\" likhein."
     },
     'transfer_confirm': {
-        'en': "Confirm: sending RS {amount:,} to {recipient}, account {account_number} — yes/no?",
-        'ur': "\u200Fتصدیق کریں: \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو، اکاؤنٹ \u2066{account_number}\u2069 میں بھیجنا ہے — yes/no؟",
-        'ru': "Confirm karein: RS {amount:,} {recipient} ko, account {account_number} mein bhejna hai — yes/no?"
+        'en': "Confirm: sending RS {amount:,} to {recipient} via {transfer_method} ({transfer_identifier}) for {purpose} [{description}] — yes/no?",
+        'ur': "\u200Fتصدیق کریں: \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو \u2066{transfer_method}\u2069 (\u2066{transfer_identifier}\u2069) کے ذریعے، \u2066{purpose}\u2069 [\u2066{description}\u2069] کے لیے بھیجنا ہے — yes/no؟",
+        'ru': "Confirm karein: RS {amount:,} {recipient} ko {transfer_method} ({transfer_identifier}) ke zariye, {purpose} [{description}] ke liye bhejna hai — yes/no?"
     },
     'transfer_password_request': {
         'en': "🔒 Please enter your password to confirm the transfer of RS {amount:,} to {recipient}.",
@@ -536,30 +567,35 @@ RESPONSES = {
         'ur': "✅ \u200Fٹرانسفر کامیاب! \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو بھیجا گیا۔\n💰 \u200Fنیا بیلنس: \u2066RS {balance:,}\u2069\n⭐ \u200Fآپ نے \u2066{points}\u2069 انعامی پوائنٹس حاصل کیے!",
         'ru': "✅ Transfer kamyab! RS {amount:,} {recipient} ko bheja gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
     },
-    'bill_ask_type': {
-        'en': "Which bill would you like to pay?\n• Electricity\n• Gas\n• Internet\n• Water",
-        'ur': "📋 آپ کون سا بل ادا کرنا چاہتے ہیں؟\n• بجلی\n• گیس\n• انٹرنیٹ\n• پانی",
-        'ru': "Aap konsa bill ada karna chahte hain?\n• Electricity\n• Gas\n• Internet\n• Water"
+    'bill_ask_category': {
+        'en': "Which bill would you like to pay?\n• Electricity\n• Gas\n• Internet",
+        'ur': "📋 آپ کون سا بل ادا کرنا چاہتے ہیں؟\n• بجلی\n• گیس\n• انٹرنیٹ",
+        'ru': "Aap konsa bill ada karna chahte hain?\n• Electricity\n• Gas\n• Internet"
+    },
+    'bill_ask_provider': {
+        'en': "Which provider - {provider_hint}?",
+        'ur': "🏢 کون سا پرووائیڈر - {provider_hint}؟",
+        'ru': "Konsa provider - {provider_hint}?"
     },
     'bill_ask_reference': {
-        'en': " Please provide your {bill_type} bill reference number.",
-        'ur': "🔢 براۓ کرم اپنا {bill_type} بل ریفرنس نمبر فراہم کریں۔",
-        'ru': " Apna {bill_type} bill reference number provide karein."
+        'en': " Please provide your {bill_category} bill reference number.",
+        'ur': "🔢 براۓ کرم اپنا {bill_category} بل ریفرنس نمبر فراہم کریں۔",
+        'ru': " Apna {bill_category} ka bill reference number provide karein."
     },
     'bill_ask_amount': {
-        'en': "How much is your {bill_type} bill amount?",
-        'ur': "💵 آپ کا {bill_type} بل کتنا ہے؟",
-        'ru': "Aap ka {bill_type} bill kitna hai?"
+        'en': "How much is your {bill_category} bill amount?",
+        'ur': "💵 آپ کا {bill_category} بل کتنا ہے؟",
+        'ru': "Aap ka {bill_category} bill kitna hai?"
     },
     'bill_confirm': {
-        'en': "Confirm: paying RS {amount:,} for your {bill_type} bill (ref {account_number}) — yes/no?",
-        'ur': "تصدیق کریں: {bill_type} بل (ریف \u2066{account_number}\u2069) کے لیے \u2066RS {amount:,}\u2069 ادا کرنا ہے — yes/no؟",
-        'ru': "Confirm karein: {bill_type} bill (ref {account_number}) ke liye RS {amount:,} pay karna hai — yes/no?"
+        'en': "Confirm: paying RS {amount:,} to {service_provider} for your {bill_category} bill (ref {bill_reference}) — yes/no?",
+        'ur': "تصدیق کریں: \u2066{service_provider}\u2069 کو {bill_category} بل (ریف \u2066{bill_reference}\u2069) کے لیے \u2066RS {amount:,}\u2069 ادا کرنا ہے — yes/no؟",
+        'ru': "Confirm karein: {service_provider} ko {bill_category} bill (ref {bill_reference}) ke liye RS {amount:,} pay karna hai — yes/no?"
     },
     'bill_payment_password_request': {
-        'en': "🔒 Please enter your password to confirm the {bill_type} bill payment of RS {amount:,}.",
-        'ur': "🔒 براۓ کرم اپنا پاس ورڈ درج کریں تاکہ {bill_type} بل \u2066RS {amount:,}\u2069 کی ادائیگی کی تصدیق ہو سکے۔",
-        'ru': "🔒 Apna password enter karein taake {bill_type} bill RS {amount:,} ki payment confirm ho sake."
+        'en': "🔒 Please enter your password to confirm the {bill_category} bill payment of RS {amount:,} to {service_provider}.",
+        'ur': "🔒 براۓ کرم اپنا پاس ورڈ درج کریں تاکہ \u2066{service_provider}\u2069 کو {bill_category} بل \u2066RS {amount:,}\u2069 کی ادائیگی کی تصدیق ہو سکے۔",
+        'ru': "🔒 Apna password enter karein taake {service_provider} ko {bill_category} bill RS {amount:,} ki payment confirm ho sake."
     },
     'bill_payment_success': {
         'en': "✅ Bill payment successful! {bill_type} bill of RS {amount:,} paid.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
@@ -673,10 +709,40 @@ RESPONSES = {
         'ur': "ٹھیک ہے - درست اکاؤنٹ نمبر کیا ہے؟",
         'ru': "Theek hai - sahi account number kya hai?"
     },
+    'edit_reprompt_transfer_method': {
+        'en': "Okay - which transfer method should it be: IBAN, Account Number, or Raast ID?",
+        'ur': "ٹھیک ہے - کون سا ٹرانسفر میتھڈ ہونا چاہیے: IBAN، Account Number، یا Raast ID؟",
+        'ru': "Theek hai - konsa transfer method hona chahiye: IBAN, Account Number, ya Raast ID?"
+    },
+    'edit_reprompt_transfer_identifier': {
+        'en': "Sure - what's the correct IBAN / account number / Raast ID?",
+        'ur': "ٹھیک ہے - درست IBAN / اکاؤنٹ نمبر / Raast ID کیا ہے؟",
+        'ru': "Theek hai - sahi IBAN / account number / Raast ID kya hai?"
+    },
+    'edit_reprompt_purpose': {
+        'en': "Got it - what should the purpose be instead?",
+        'ur': "ٹھیک ہے - مقصد کیا ہونا چاہیے؟",
+        'ru': "Theek hai - purpose kya hona chahiye?"
+    },
+    'edit_reprompt_description': {
+        'en': "Sure - what should the description be instead?",
+        'ur': "ٹھیک ہے - تفصیل کیا ہونی چاہیے؟",
+        'ru': "Theek hai - description kya honi chahiye?"
+    },
     'edit_reprompt_bill_type': {
         'en': "Okay - which bill type should it be?",
         'ur': "ٹھیک ہے - بل کی قسم کیا ہونی چاہیے؟",
         'ru': "Theek hai - bill type kya hona chahiye?"
+    },
+    'edit_reprompt_bill_category': {
+        'en': "Okay - which bill category should it be: Electricity, Gas, or Internet?",
+        'ur': "ٹھیک ہے - بل کیٹیگری کیا ہونی چاہیے: Electricity، Gas، یا Internet؟",
+        'ru': "Theek hai - bill category kya honi chahiye: Electricity, Gas, ya Internet?"
+    },
+    'edit_reprompt_service_provider': {
+        'en': "Sure - which provider should it be instead?",
+        'ur': "ٹھیک ہے - کون سا پرووائیڈر ہونا چاہیے؟",
+        'ru': "Theek hai - konsa provider hona chahiye?"
     },
     'edit_reprompt_bill_reference': {
         'en': "Sure - what's the correct bill reference number?",
@@ -713,6 +779,26 @@ RESPONSES = {
         'ur': "وصول کنندہ کا اکاؤنٹ نمبر لکھیں - حروف اور ہندسوں کا مرکب، 6 سے 20 حروف (مثلاً ABC12345678)۔",
         'ru': "Recipient ka account number type karein - letters aur numbers ka mix, 6-20 characters (maslan ABC12345678)."
     },
+    'help_transfer_method': {
+        'en': "Tell me how you'd like to send the money: IBAN, Account Number, or Raast ID.",
+        'ur': "بتائیں آپ کس طریقے سے پیسے بھیجنا چاہتے ہیں: IBAN، Account Number، یا Raast ID۔",
+        'ru': "Batayein aap kis tareeqe se paisa bhejna chahte hain: IBAN, Account Number, ya Raast ID."
+    },
+    'help_transfer_identifier': {
+        'en': "Type the recipient's IBAN, account number, or Raast ID, depending on the method you chose.",
+        'ur': "وصول کنندہ کا IBAN، اکاؤنٹ نمبر، یا Raast ID لکھیں، جو طریقہ آپ نے چنا ہے اس کے مطابق۔",
+        'ru': "Recipient ka IBAN, account number, ya Raast ID type karein, jo method aap ne chuna hai us ke mutabiq."
+    },
+    'help_transfer_purpose': {
+        'en': "Tell me the purpose of this transfer: Rent, Salary, Business, Personal, or Other.",
+        'ur': "بتائیں اس ٹرانسفر کا مقصد کیا ہے: Rent، Salary، Business، Personal، یا Other۔",
+        'ru': "Batayein is transfer ka purpose kya hai: Rent, Salary, Business, Personal, ya Other."
+    },
+    'help_transfer_description': {
+        'en': "Optionally tell me a category for this transfer (e.g. Grocery, Rent, Utility Bills), or say \"skip\".",
+        'ur': "چاہیں تو اس ٹرانسفر کے لیے ایک کیٹیگری بتائیں، یا \"skip\" لکھیں۔",
+        'ru': "Chahein to is transfer ke liye ek category batayein, ya \"skip\" likhein."
+    },
     'help_transfer_confirmation': {
         'en': "Reply \"yes\" to confirm this transfer, or \"no\" to change something.",
         'ur': "اس ٹرانسفر کی تصدیق کے لیے \"yes\" لکھیں، یا کچھ تبدیل کرنے کے لیے \"no\"۔",
@@ -722,6 +808,16 @@ RESPONSES = {
         'en': "Tell me which bill you'd like to pay: electricity, gas, internet, or water.",
         'ur': "بتائیں کون سا بل ادا کرنا ہے: بجلی، گیس، انٹرنیٹ، یا پانی۔",
         'ru': "Batayein konsa bill pay karna hai: electricity, gas, internet, ya water."
+    },
+    'help_bill_category': {
+        'en': "Tell me which bill you'd like to pay: Electricity, Gas, or Internet.",
+        'ur': "بتائیں کون سا بل ادا کرنا ہے: Electricity، Gas، یا Internet۔",
+        'ru': "Batayein konsa bill pay karna hai: Electricity, Gas, ya Internet."
+    },
+    'help_bill_provider': {
+        'en': "Tell me your service provider, e.g. K-Electric, LESCO, SSGC, PTCL, etc.",
+        'ur': "اپنا سروس پرووائیڈر بتائیں، مثلاً K-Electric، LESCO، SSGC، PTCL، وغیرہ۔",
+        'ru': "Apna service provider batayein, maslan K-Electric, LESCO, SSGC, PTCL, waghera."
     },
     'help_bill_reference': {
         'en': "Type your bill's reference number, found on your bill statement.",
@@ -1336,6 +1432,207 @@ def extract_bill_type(text: str) -> Optional[str]:
     return None
 
 
+# ── Bill Category / Service Provider (new pay_bill slots) ─────────────────
+# Mirrors the app's "Bill Category" -> "Service Provider" dependent
+# dropdowns. Category is restricted to the three categories the form
+# actually offers; provider names are unique across categories so they
+# can be recognized from free text without needing the already-selected
+# category as context.
+BILL_CATEGORY_MAP = {
+    'electricity': 'Electricity',
+    'k-electric': 'Electricity',
+    'k electric': 'Electricity',
+    'lesco': 'Electricity',
+    'mepco': 'Electricity',
+    'hesco': 'Electricity',
+    'bijli': 'Electricity',
+    'bijlee': 'Electricity',
+    'electric': 'Electricity',
+    'gas': 'Gas',
+    'sui gas': 'Gas',
+    'suigas': 'Gas',
+    'ssgc': 'Gas',
+    'sngpl': 'Gas',
+    'internet': 'Internet',
+    'ptcl': 'Internet',
+    'transworld': 'Internet',
+    'stormfiber': 'Internet',
+    'storm fiber': 'Internet',
+    'nayatel': 'Internet',
+}
+
+SERVICE_PROVIDER_MAP = {
+    'Electricity': {
+        'k-electric': 'K-Electric', 'k electric': 'K-Electric', 'kelectric': 'K-Electric',
+        'lesco': 'LESCO', 'mepco': 'MEPCO', 'hesco': 'HESCO',
+    },
+    'Gas': {
+        'ssgc': 'SSGC', 'sngpl': 'SNGPL',
+    },
+    'Internet': {
+        'ptcl': 'PTCL', 'transworld': 'Transworld',
+        'stormfiber': 'Stormfiber', 'storm fiber': 'Stormfiber',
+        'nayatel': 'Nayatel',
+    },
+}
+
+# Flattened lookup: any recognizable provider alias -> canonical name.
+# Provider names don't overlap across categories, so this can be matched
+# context-free from raw text.
+_FLAT_PROVIDER_MAP = {
+    alias: canonical
+    for providers in SERVICE_PROVIDER_MAP.values()
+    for alias, canonical in providers.items()
+}
+
+# What providers to suggest once a bill category has been chosen - used to
+# render a helpful hint in the "which provider" prompt.
+PROVIDERS_BY_CATEGORY_DISPLAY = {
+    'Electricity': 'K-Electric, LESCO, MEPCO, or HESCO',
+    'Gas': 'SSGC or SNGPL',
+    'Internet': 'PTCL, Transworld, Stormfiber, or Nayatel',
+}
+
+
+def extract_bill_category(text: str) -> Optional[str]:
+    """Extract the bill category (Electricity / Gas / Internet) - the new
+    pay_bill first slot, matching the app's "Bill Category" dropdown."""
+    normalized = normalize_slang(text.lower())
+    # Longer/more specific keys first so e.g. "sui gas" matches before a
+    # shorter accidental substring would.
+    for key in sorted(BILL_CATEGORY_MAP.keys(), key=len, reverse=True):
+        if key in normalized:
+            return BILL_CATEGORY_MAP[key]
+    return None
+
+
+def extract_service_provider(text: str) -> Optional[str]:
+    """Extract the service provider (e.g. LESCO, SSGC, PTCL) - the new
+    pay_bill second slot, matching the app's "Service Provider" dropdown.
+    Context-free: provider names are unique across categories."""
+    normalized = normalize_slang(text.lower())
+    for key in sorted(_FLAT_PROVIDER_MAP.keys(), key=len, reverse=True):
+        if key in normalized:
+            return _FLAT_PROVIDER_MAP[key]
+    return None
+
+
+# ── Transfer Method / Identifier / Purpose / Description (new
+#    transfer_money slots) ──────────────────────────────────────────────
+TRANSFER_METHOD_MAP = {
+    'iban': 'IBAN',
+    'account number': 'Account Number',
+    'account no': 'Account Number',
+    'acc number': 'Account Number',
+    'acc no': 'Account Number',
+    'account': 'Account Number',
+    'raast id': 'Raast ID',
+    'raast': 'Raast ID',
+}
+
+
+def extract_transfer_method(text: str) -> Optional[str]:
+    """Extract the transfer method (IBAN / Account Number / Raast ID) -
+    matches the app's "Transfer Method" dropdown."""
+    normalized = normalize_slang(text.lower())
+    for key in sorted(TRANSFER_METHOD_MAP.keys(), key=len, reverse=True):
+        if re.search(r'\b' + re.escape(key) + r'\b', normalized):
+            return TRANSFER_METHOD_MAP[key]
+    return None
+
+
+def extract_transfer_identifier(text: str) -> Optional[str]:
+    """
+    Extract the recipient's destination identifier for a transfer.
+
+    A Slot extractor only ever sees raw text (no access to which
+    transfer_method was previously chosen), so this recognizes any of the
+    three formats the app supports and accepts whichever matches:
+      - IBAN: 2 letters (country code) + 22 alphanumeric chars = 24 total
+        (e.g. PK36SCBL0000001123456702).
+      - Raast ID: an 11-digit Pakistani mobile number (03XXXXXXXXX),
+        optionally with a +92/0092/92 country-code prefix.
+      - Account Number: falls back to the existing account-number rules
+        (6-20 char mix of letters and digits).
+    """
+    raw = text.strip()
+    if not raw:
+        return None
+
+    cleaned = raw.upper()
+    cleaned = re.sub(r'\b(IBAN|ACCOUNT|NUMBER|ACC|NO|RAAST|ID)\b', '', cleaned)
+    cleaned = re.sub(r'[\s-]', '', cleaned).strip()
+
+    # IBAN check
+    if re.fullmatch(r'[A-Z]{2}\d{2}[A-Z0-9]{16,20}', cleaned) and len(cleaned) <= 34:
+        return cleaned
+
+    # Raast ID (mobile number) check
+    digits_only = re.sub(r'\D', '', cleaned)
+    phone_match = re.fullmatch(r'(?:0092|92|0)?(3\d{9})', digits_only)
+    if phone_match:
+        return '0' + phone_match.group(1)
+
+    # Fall back to the generic account-number validator.
+    return validate_account_number(text)
+
+
+PURPOSE_MAP = {
+    'rent': 'Rent',
+    'salary': 'Salary',
+    'business': 'Business',
+    'personal': 'Personal',
+    'other': 'Other',
+}
+
+
+def extract_purpose(text: str) -> Optional[str]:
+    """Extract transfer purpose - matches the app's "Purpose" dropdown
+    (Rent / Salary / Business / Personal / Other)."""
+    normalized = normalize_slang(text.lower())
+    for key in sorted(PURPOSE_MAP.keys(), key=len, reverse=True):
+        if re.search(r'\b' + re.escape(key) + r'\b', normalized):
+            return PURPOSE_MAP[key]
+    return None
+
+
+DESCRIPTION_MAP = {
+    'utility bills': 'Utility Bills',
+    'utility bill': 'Utility Bills',
+    'utilities': 'Utility Bills',
+    'grocery': 'Grocery',
+    'groceries': 'Grocery',
+    'household staff': 'Household Staff',
+    'staff': 'Household Staff',
+    'society maintenance': 'Society Maintenance',
+    'maintenance': 'Society Maintenance',
+    'car & fuel': 'Car & Fuel',
+    'car and fuel': 'Car & Fuel',
+    'fuel': 'Car & Fuel',
+    'medical': 'Medical',
+    'education': 'Education',
+    'entertainment': 'Entertainment',
+    'rent': 'Rent',
+    'transfer': 'Transfer',
+    'other': 'Other',
+}
+
+# The app's "Description" field is optional and defaults to "Transfer" -
+# used to auto-fill the slot rather than blocking the conversation on it.
+DEFAULT_TRANSFER_DESCRIPTION = 'Transfer'
+
+
+def extract_description(text: str) -> Optional[str]:
+    """Extract the (optional) transfer description/category - matches the
+    app's "Description" dropdown. Defaults are handled by the caller;
+    this only recognizes an explicit category if one is mentioned."""
+    normalized = normalize_slang(text.lower())
+    for key in sorted(DESCRIPTION_MAP.keys(), key=len, reverse=True):
+        if re.search(r'\b' + re.escape(key) + r'\b', normalized):
+            return DESCRIPTION_MAP[key]
+    return None
+
+
 def extract_bill_reference(text: str) -> Optional[str]:
     """Extract bill reference number — accepts anything reasonable.
 
@@ -1461,29 +1758,49 @@ def strip_amount_substring(user_message: str) -> str:
 
 
 TRANSFER_SLOTS = {
-    'amount': Slot(
-        name='amount',
-        extractor=extract_amount,
-        on_missing_response_key='transfer_ask_amount',
-    ),
     'recipient': Slot(
         name='recipient',
         extractor=extract_recipient_name_for_transfer_followup,
         on_missing_response_key='transfer_ask_recipient_name',
     ),
-    'account_number': Slot(
-        name='account_number',
-        extractor=validate_account_number,
-        on_missing_response_key='transfer_ask_account',
-        on_invalid_response_key='transfer_invalid_account',
+    'transfer_method': Slot(
+        name='transfer_method',
+        extractor=extract_transfer_method,
+        on_missing_response_key='transfer_ask_method',
+    ),
+    'transfer_identifier': Slot(
+        name='transfer_identifier',
+        extractor=extract_transfer_identifier,
+        on_missing_response_key='transfer_ask_identifier',
+        on_invalid_response_key='transfer_invalid_identifier',
+    ),
+    'amount': Slot(
+        name='amount',
+        extractor=extract_amount,
+        on_missing_response_key='transfer_ask_amount',
+    ),
+    'purpose': Slot(
+        name='purpose',
+        extractor=extract_purpose,
+        on_missing_response_key='transfer_ask_purpose',
+    ),
+    'description': Slot(
+        name='description',
+        extractor=extract_description,
+        on_missing_response_key='transfer_ask_description',
     ),
 }
 
 BILL_SLOTS = {
-    'bill_type': Slot(
-        name='bill_type',
-        extractor=extract_bill_type,
-        on_missing_response_key='bill_ask_type',
+    'bill_category': Slot(
+        name='bill_category',
+        extractor=extract_bill_category,
+        on_missing_response_key='bill_ask_category',
+    ),
+    'service_provider': Slot(
+        name='service_provider',
+        extractor=extract_service_provider,
+        on_missing_response_key='bill_ask_provider',
     ),
     'bill_reference': Slot(
         name='bill_reference',
@@ -1505,10 +1822,14 @@ FLOW_SLOTS = {
 # Help-template key for each (flow, slot) pair - used by the contextual
 # help interceptor.
 HELP_KEY_FOR_SLOT = {
-    ('transfer_money', 'amount'): 'help_transfer_amount',
     ('transfer_money', 'recipient'): 'help_transfer_recipient',
-    ('transfer_money', 'account_number'): 'help_transfer_account',
-    ('pay_bill', 'bill_type'): 'help_bill_type',
+    ('transfer_money', 'transfer_method'): 'help_transfer_method',
+    ('transfer_money', 'transfer_identifier'): 'help_transfer_identifier',
+    ('transfer_money', 'amount'): 'help_transfer_amount',
+    ('transfer_money', 'purpose'): 'help_transfer_purpose',
+    ('transfer_money', 'description'): 'help_transfer_description',
+    ('pay_bill', 'bill_category'): 'help_bill_category',
+    ('pay_bill', 'service_provider'): 'help_bill_provider',
     ('pay_bill', 'bill_reference'): 'help_bill_reference',
     ('pay_bill', 'amount'): 'help_bill_amount',
 }
@@ -1519,8 +1840,12 @@ HELP_KEY_FOR_SLOT = {
 CLARIFICATION_TYPE_FOR_SLOT = {
     'amount': 'amount_missing',
     'recipient': 'recipient_name_missing',
-    'account_number': 'account_number_missing',
-    'bill_type': 'bill_type_missing',
+    'transfer_method': 'transfer_method_missing',
+    'transfer_identifier': 'transfer_identifier_missing',
+    'purpose': 'purpose_missing',
+    'description': 'description_missing',
+    'bill_category': 'bill_category_missing',
+    'service_provider': 'service_provider_missing',
     'bill_reference': 'bill_reference_missing',
 }
 
@@ -1669,8 +1994,9 @@ def _passthrough_flow_fields(ctx: Dict) -> Dict:
         passthrough['current_flow'] = ctx['current_flow']
     if ctx.get('flow_state'):
         passthrough['flow_state'] = ctx['flow_state']
-    for key in ('amount', 'recipient', 'account_number', 'bill_type',
-                'bill_reference', 'redemption_choice'):
+    for key in ('amount', 'recipient', 'transfer_method', 'transfer_identifier',
+                'purpose', 'description', 'bill_category', 'service_provider',
+                'bill_reference', 'redemption_choice', 'provider_hint'):
         if key in ctx:
             passthrough[key] = ctx[key]
     return passthrough
@@ -1703,6 +2029,18 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
     # whether we're mid-collection or already sitting in confirmation,
     # since at confirmation time every slot in slot_order is filled.
     filled_slots = [s for s in slot_order if ctx.get(s)]
+    # 'description' is pre-seeded with a default ("Transfer") the moment a
+    # transfer_money flow starts, since it's an optional field. Because
+    # filled_slots is derived from slot ORDER (not fill recency), that
+    # default would otherwise look like "the most recently filled slot"
+    # any time it's the last slot ctx happens to have a value for - even
+    # while earlier required slots are still empty. Only let 'description'
+    # be a candidate once every other slot has actually been filled (i.e.
+    # we're genuinely at/near the end of the flow).
+    if current_flow == 'transfer_money' and 'description' in filled_slots:
+        other_slots = [s for s in slot_order if s != 'description']
+        if not all(ctx.get(s) for s in other_slots):
+            filled_slots = [s for s in filled_slots if s != 'description']
     if not filled_slots:
         return {
             'intent': current_flow,
@@ -1759,6 +2097,12 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
 
     new_ctx = {k: v for k, v in ctx.items()}
     new_ctx.pop(target_slot, None)
+    if current_flow == 'pay_bill' and target_slot == 'bill_category':
+        # service_provider and the provider_hint both depend on
+        # bill_category - clear them too so editing the category doesn't
+        # leave a stale, mismatched provider behind.
+        new_ctx.pop('service_provider', None)
+        new_ctx.pop('provider_hint', None)
 
     if new_value is not None:
         # Value supplied inline - apply it immediately and move forward
@@ -1788,6 +2132,8 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
     for key in slot_order:
         if key != target_slot and new_ctx.get(key):
             result[key] = new_ctx[key]
+    if new_ctx.get('provider_hint'):
+        result['provider_hint'] = new_ctx['provider_hint']
     return result
 
 
@@ -1857,12 +2203,15 @@ def _render_confirmation_prompt(current_flow: str, ctx: Dict, language: str) -> 
     if current_flow == 'transfer_money':
         return RESPONSES['transfer_confirm'][language].format(
             amount=ctx['amount'], recipient=ctx['recipient'],
-            account_number=ctx['account_number'],
+            transfer_method=ctx['transfer_method'],
+            transfer_identifier=ctx['transfer_identifier'],
+            purpose=ctx['purpose'], description=ctx['description'],
         )
     else:
         return RESPONSES['bill_confirm'][language].format(
-            amount=ctx['amount'], bill_type=ctx['bill_type'],
-            account_number=ctx['bill_reference'],
+            amount=ctx['amount'], bill_category=ctx['bill_category'],
+            service_provider=ctx['service_provider'],
+            bill_reference=ctx['bill_reference'],
         )
 
 
@@ -1870,16 +2219,26 @@ def _enter_password_state(current_flow: str, ctx: Dict, language: str) -> Dict:
     """Transition from confirmation into password collection - identical
     payload shape to what app.py already expects under awaiting_password."""
     if current_flow == 'transfer_money':
-        amount, recipient, account_number = ctx['amount'], ctx['recipient'], ctx['account_number']
-        pending_entities = {'amount': amount, 'recipient': recipient, 'account_number': account_number}
+        amount, recipient = ctx['amount'], ctx['recipient']
+        transfer_method, transfer_identifier = ctx['transfer_method'], ctx['transfer_identifier']
+        purpose, description = ctx['purpose'], ctx['description']
+        pending_entities = {
+            'amount': amount, 'recipient': recipient,
+            'transfer_method': transfer_method, 'transfer_identifier': transfer_identifier,
+            'purpose': purpose, 'description': description,
+        }
         ai_response = RESPONSES['transfer_password_request'][language].format(
             amount=amount, recipient=recipient,
         )
     else:
-        bill_type, bill_reference, amount = ctx['bill_type'], ctx['bill_reference'], ctx['amount']
-        pending_entities = {'bill_type': bill_type, 'account_number': bill_reference, 'amount': amount}
+        bill_category, service_provider = ctx['bill_category'], ctx['service_provider']
+        bill_reference, amount = ctx['bill_reference'], ctx['amount']
+        pending_entities = {
+            'bill_category': bill_category, 'service_provider': service_provider,
+            'bill_reference': bill_reference, 'amount': amount,
+        }
         ai_response = RESPONSES['bill_payment_password_request'][language].format(
-            bill_type=bill_type, amount=amount,
+            bill_category=bill_category, service_provider=service_provider, amount=amount,
         )
 
     return {
@@ -1965,10 +2324,19 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         extracted = None
 
     # Special-case the very first slot of transfer_money: try to also pull
-    # the recipient out of the same message.
-    if (current_flow == 'transfer_money' and target_slot == 'amount'
+    # the amount out of the same message (e.g. "send Ahmed 5000" gives both
+    # the recipient and the amount in one turn), instead of always asking
+    # for the amount again several turns later.
+    if (current_flow == 'transfer_money' and target_slot == 'recipient'
             and extracted is not None):
-        result = _start_transfer_with_amount(user_message, extracted, effective_language)
+        new_ctx = dict(ctx)
+        new_ctx['recipient'] = extracted
+        new_ctx['current_flow'] = current_flow
+        bonus_amount = extract_amount(user_message)
+        if bonus_amount is not None:
+            new_ctx['amount'] = bonus_amount
+        result = run_flow_step(user_message="", ctx=new_ctx, language=language,
+                                force_flow=current_flow, skip_extraction=True)
         result['session_language'] = ctx.get('session_language', language)
         return result
 
@@ -2005,66 +2373,32 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         for key in slot_order:
             if key != target_slot and ctx.get(key):
                 result[key] = ctx[key]
+        if ctx.get('provider_hint'):
+            result['provider_hint'] = ctx['provider_hint']
         return result
 
     # Slot filled successfully - advance.
     new_ctx = dict(ctx)
     new_ctx[target_slot] = extracted
     new_ctx['current_flow'] = current_flow
+    if current_flow == 'pay_bill' and target_slot == 'bill_category':
+        # Precompute a provider hint (e.g. "K-Electric, LESCO, MEPCO, or
+        # HESCO") so the next prompt can list the right options for the
+        # category the user just picked - mirrors the app's dependent
+        # "Service Provider" dropdown.
+        new_ctx['provider_hint'] = PROVIDERS_BY_CATEGORY_DISPLAY.get(extracted, '')
     return run_flow_step(user_message="", ctx=new_ctx, language=language,
                           force_flow=current_flow, skip_extraction=False)
 
 
 def _format_with_ctx(template: str, ctx: Dict) -> str:
     """Format a response template using whatever flow fields are already
-    in ctx (amount/recipient/bill_type/etc.), tolerating missing keys."""
+    in ctx (amount/recipient/bill_category/etc.), tolerating missing keys."""
     try:
         return template.format(**ctx)
     except (KeyError, IndexError):
         return template
 
-
-def _start_transfer_with_amount(user_message: str, amount: int, language: str) -> Dict:
-    """
-    Mirrors the top-level transfer_money intent
-    entry point: once an amount is found, also try to pull the recipient
-    out of the SAME message (e.g. "Ahmed ko 300 bhejdo") instead of always
-    re-asking for a name the user already gave.
-    """
-    text_without_amount = strip_amount_substring(user_message)
-    recipient = extract_recipient_name_for_transfer_followup(text_without_amount)
-
-    if recipient:
-        return {
-            'intent': 'transfer_money',
-            'language': language,
-            'entities': {'amount': amount, 'recipient': recipient},
-            'needs_clarification': True,
-            'clarification_type': 'account_number_missing',
-            'requires_human': False,
-            'handoff_reason': None,
-            'normalized_text': normalize_slang(user_message),
-            'ai_response': RESPONSES['transfer_ask_account'][language].format(recipient=recipient),
-            'current_flow': 'transfer_money',
-            'flow_state': FlowState.TRANSFER_AWAIT_ACCOUNT.name,
-            'amount': amount,
-            'recipient': recipient,
-        }
-
-    return {
-        'intent': 'transfer_money',
-        'language': language,
-        'entities': {'amount': amount},
-        'needs_clarification': True,
-        'clarification_type': 'recipient_name_missing',
-        'requires_human': False,
-        'handoff_reason': None,
-        'normalized_text': normalize_slang(user_message),
-        'ai_response': RESPONSES['transfer_ask_recipient_name'][language].format(amount=amount),
-        'current_flow': 'transfer_money',
-        'flow_state': FlowState.TRANSFER_AWAIT_RECIPIENT.name,
-        'amount': amount,
-    }
 
 
 class BankAIConversation:
@@ -2123,6 +2457,24 @@ class BankAIConversation:
     def extract_bill_reference(self, text: str) -> Optional[str]:
         return extract_bill_reference(text)
 
+    def extract_bill_category(self, text: str) -> Optional[str]:
+        return extract_bill_category(text)
+
+    def extract_service_provider(self, text: str) -> Optional[str]:
+        return extract_service_provider(text)
+
+    def extract_transfer_method(self, text: str) -> Optional[str]:
+        return extract_transfer_method(text)
+
+    def extract_transfer_identifier(self, text: str) -> Optional[str]:
+        return extract_transfer_identifier(text)
+
+    def extract_purpose(self, text: str) -> Optional[str]:
+        return extract_purpose(text)
+
+    def extract_description(self, text: str) -> Optional[str]:
+        return extract_description(text)
+
     def extract_redemption_choice(self, text: str) -> Optional[int]:
         return extract_redemption_choice(text)
 
@@ -2166,7 +2518,7 @@ class BankAIConversation:
         try:
             self._llm = LLMFallback(
                 model="openai/gpt-oss-120b"
-                # Cheaper option: model="openai/gpt-oss-120b"
+                # Cheaper option: model="llama-3.1-8b-instant"
             )
             self._llm_enabled = True
         except Exception as _llm_exc:
@@ -2343,7 +2695,11 @@ class BankAIConversation:
         intent = self.detect_intent(user_message)
 
         if intent == 'transfer_money':
-            result = run_flow_step(user_message, {}, language, force_flow='transfer_money')
+            # 'description' defaults to "Transfer" - it's an optional field
+            # in the app's transfer form, so pre-seed it rather than
+            # blocking the conversation on a sixth question.
+            result = run_flow_step(user_message, {'description': DEFAULT_TRANSFER_DESCRIPTION},
+                                   language, force_flow='transfer_money')
             result['session_language'] = language
             return result
 
@@ -2412,11 +2768,17 @@ class BankAIConversation:
             llm_entities = llm_result.get('entities', {})
 
             if llm_intent == 'transfer_money':
-                result = run_flow_step(user_message, ctx, language,
+                transfer_ctx = dict(ctx)
+                # 'description' is optional in the app's transfer form and
+                # defaults to "Transfer" - pre-seed it the same way the
+                # regex entry point does.
+                transfer_ctx.setdefault('description', DEFAULT_TRANSFER_DESCRIPTION)
+                result = run_flow_step(user_message, transfer_ctx, language,
                                        force_flow='transfer_money')
                 result['session_language'] = language
                 result['llm_used'] = True
-                for key in ('amount', 'recipient'):
+                for key in ('amount', 'recipient', 'transfer_method',
+                            'transfer_identifier', 'purpose', 'description'):
                     if llm_entities.get(key) and not result['entities'].get(key):
                         result['entities'][key] = llm_entities[key]
                 return result
@@ -2426,8 +2788,9 @@ class BankAIConversation:
                                        force_flow='pay_bill')
                 result['session_language'] = language
                 result['llm_used'] = True
-                if llm_entities.get('bill_type') and not result['entities'].get('bill_type'):
-                    result['entities']['bill_type'] = llm_entities['bill_type']
+                for key in ('bill_category', 'service_provider', 'bill_reference', 'amount'):
+                    if llm_entities.get(key) and not result['entities'].get(key):
+                        result['entities'][key] = llm_entities[key]
                 return result
 
             if llm_intent == 'general_chat':

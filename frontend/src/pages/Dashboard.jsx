@@ -2191,6 +2191,14 @@ export default function Dashboard() {
         .advisor-chat-popup-input-row input:focus { outline:none; box-shadow:0 0 0 3px rgba(92,45,145,0.15); }
         .advisor-chat-popup-input-row button { width:38px; height:38px; border-radius:50%; background:var(--primary-purple); color:#fff; border:none; cursor:pointer; flex-shrink:0; }
         .advisor-chat-popup-input-row button:disabled { opacity:0.5; cursor:default; }
+        /* Hands-free voice states for Fin's mic toggle: idle (on, not yet active) / listening (pulsing red) / processing (spinner) / speaking (waveform) */
+        .advisor-mic-btn { background:var(--secondary-purple); color:var(--primary-purple); font-size:13px; }
+        .advisor-mic-btn.idle { background:var(--primary-purple); color:#fff; }
+        .advisor-mic-btn.listening { background:var(--danger, #b91c1c); color:#fff; animation:advisorMicPulse 1.5s infinite; }
+        .advisor-mic-btn.processing { background:var(--primary-purple); color:#fff; }
+        .advisor-mic-btn.speaking { background:#15803d; color:#fff; animation:advisorMicSpeak 1.2s infinite; }
+        @keyframes advisorMicPulse { 0%{box-shadow:0 0 0 0 rgba(185,28,28,0.6)} 70%{box-shadow:0 0 0 8px rgba(185,28,28,0)} 100%{box-shadow:0 0 0 0 rgba(185,28,28,0)} }
+        @keyframes advisorMicSpeak { 0%{box-shadow:0 0 0 0 rgba(21,128,61,0.5)} 70%{box-shadow:0 0 0 8px rgba(21,128,61,0)} 100%{box-shadow:0 0 0 0 rgba(21,128,61,0)} }
 
         @media(max-width:900px) {
           .goal-type-grid{grid-template-columns:repeat(3, 1fr);}
