@@ -7,6 +7,17 @@ export default function Chat() {
   const messagesEndRef = useRef(null)
   const printRef = useRef(null)
   const voiceManagerRef = useRef(null)
+  // Always holds the LATEST sendMessage function for this render. The
+  // FinBudVoiceManager instance itself is created once in a mount-only
+  // effect (see below) - without this ref, its onTranscript callback
+  // would stay permanently bound to the very first render's sendMessage
+  // (and therefore that render's handleResponse, and therefore that
+  // render's captured isVoiceModeActive/hasCard/etc. values), which is
+  // exactly the stale-closure bug that made hands-free replies never get
+  // spoken and left the mic button stuck spinning: toggling voice mode
+  // on updated the isVoiceModeActive STATE, but the mic-driven message
+  // path was still executing against the stale FALSE captured at mount.
+  const sendMessageRef = useRef(() => {})
 
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
@@ -42,7 +53,10 @@ export default function Chat() {
   // just feeds it transcripts in and AI replies out.
   useEffect(() => {
     voiceManagerRef.current = new FinBudVoiceManager({
-      onTranscript: (transcript) => { sendMessage(transcript) },
+      // Always delegates to the CURRENT sendMessage via the ref kept in
+      // sync below, instead of closing over this (mount-time) render's
+      // sendMessage directly - see sendMessageRef's declaration for why.
+      onTranscript: (transcript) => { sendMessageRef.current(transcript) },
       onStateChange: (state) => setVoiceState(state),
       onError: (err) => {
         if (err === 'unsupported') {
@@ -85,8 +99,16 @@ export default function Chat() {
     } catch { setHasCard(true) }
   }
 
-  function appendMessage(text, type) {
-    setMessages(prev => [...prev, { text, type, id: Date.now() + Math.random() }])
+  function appendMessage(text, type, extra = {}) {
+    setMessages(prev => [...prev, { text, type, id: Date.now() + Math.random(), ...extra }])
+  }
+
+  // Signal AdvisorChatBubble (rendered on the Dashboard page, not here) to
+  // auto-open once the user lands there, since Chat.jsx has no direct
+  // handle on a component mounted on a different route.
+  function openAdvisor() {
+    try { sessionStorage.setItem('finbud_open_advisor', '1') } catch { /* noop */ }
+    navigate('/dashboard')
   }
 
   async function postChat(message) {
@@ -121,7 +143,13 @@ export default function Chat() {
       return
     }
 
-    appendMessage(data.ai_response, 'ai')
+    appendMessage(data.ai_response, 'ai', {
+      // Structured signal from the NLP layer (investment/wealth questions
+      // routed to Fin instead of being answered generically here) - drives
+      // a CTA rendered under this specific message, see the message-list
+      // render below.
+      advisorCta: !!data.redirect_to_advisor,
+    })
 
     const needsPw  = data.awaiting_password
     const needsEPw = data.awaiting_emergency_password
@@ -129,7 +157,11 @@ export default function Chat() {
 
     // Speak the reply aloud when hands-free mode is on. If a password
     // modal is about to open, don't re-arm the mic afterwards — password
-    // entry should stay typed, not spoken.
+    // entry should stay typed, not spoken. Do NOT auto-speak for a plain
+    // typed message when voice mode is off - isVoiceModeActive is the
+    // single explicit flag that gates this, exactly as it was, but this
+    // function is now always invoked with the CURRENT value of that flag
+    // (see sendMessageRef) instead of a stale one.
     if (isVoiceModeActive) {
       voiceManagerRef.current?.speak(data.ai_response, { reArm: !opensPasswordModal })
     }
@@ -256,6 +288,14 @@ export default function Chat() {
     await maybePrefill(data)
     await handleResponse(data)
   }
+
+  // Keep the ref pointed at THIS render's sendMessage (and therefore this
+  // render's handleResponse/isVoiceModeActive/hasCard/etc.) on every
+  // render, so the mount-only voiceManager effect above always calls the
+  // freshest version instead of the one captured when it was created.
+  useEffect(() => {
+    sendMessageRef.current = sendMessage
+  })
 
   async function handleHumanHandoff() {
     setMessages(prev => prev.filter(m => m.type !== 'welcome'))
@@ -519,6 +559,9 @@ export default function Chat() {
         .receipt-print .r-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #eee; font-size:14px; }
         .msg-read-aloud { display:inline-flex; background:none; border:none; cursor:pointer; font-size:13px; margin-left:8px; opacity:0.6; vertical-align:middle; }
         .msg-read-aloud:hover { opacity:1; }
+        .advisor-cta-wrap { margin-top:8px; }
+        .advisor-cta-btn { background:var(--primary-purple); color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+        .advisor-cta-btn:hover { opacity:0.9; }
 
         /* ══════════ ACCESSIBILITY (Module F) — mirrors Dashboard.jsx ══════════ */
         html[data-contrast="high"] {
@@ -573,6 +616,13 @@ export default function Chat() {
                 {m.text}
                 {m.type === 'ai' && (
                   <button type="button" className="msg-read-aloud" aria-label="Read this message aloud" onClick={() => speak(m.text)}>🔊</button>
+                )}
+                {m.type === 'ai' && m.advisorCta && (
+                  <div className="advisor-cta-wrap">
+                    <button type="button" className="advisor-cta-btn" onClick={openAdvisor}>
+                      💬 Talk to Fin, your Advisor
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
