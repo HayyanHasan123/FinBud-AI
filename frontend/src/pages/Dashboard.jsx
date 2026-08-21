@@ -575,7 +575,7 @@ export default function Dashboard() {
       fetch('/api/financial/monthly-trend', { credentials: 'include' }),
       fetch('/api/financial/utility-usage', { credentials: 'include' }),
       fetch('/api/credit-score', { credentials: 'include' }),
-      fetch(`/insights/anomalies?account=${encodeURIComponent(userData.userId)}`, { credentials: 'include' })
+      fetch(`/insights/anomalies`, { credentials: 'include' })
     ])
 
     let summary = null, summaryAvailable = false

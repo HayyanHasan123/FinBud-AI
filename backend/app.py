@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from datetime import datetime, timedelta
+from timezone_utils import now_pk, today_pk
 import secrets
 import sys
 import os
@@ -345,7 +346,7 @@ def register():
         if not all([name, email, password]):
             return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-        account_number = f"ACC{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        account_number = f"ACC{now_pk().strftime('%Y%m%d%H%M%S')}"
 
         conn = get_db()
         c = conn.cursor()
@@ -361,12 +362,18 @@ def register():
                 (account_number, name, email, password_hash, phone, balance, points, created_at, status)
             VALUES (%s, %s, %s, %s, %s, 50000, 100, %s, 'active')
             RETURNING id
-        """, (account_number, name, email, password_hash, phone, datetime.utcnow().isoformat()))
+        """, (account_number, name, email, password_hash, phone, now_pk().isoformat()))
 
         user_id = c.fetchone()['id']
         conn.commit()
         release_db(conn)
 
+        # ── Auto-seed 12 months of mock data for this new account ────────────
+        try:
+            from seeddata import run_seed
+            run_seed(account_number)
+        except Exception as e:
+            print(f"[seed_data] ⚠ Skipped seeding — {e}")
 
         session['user_id']        = user_id
         session['account_number'] = account_number
@@ -501,7 +508,7 @@ def register_phone():
             return jsonify({'success': False, 'message': 'An account with this phone number already exists. Please log in.'}), 400
 
         # ── Rate limit OTP requests per phone number ────────────────────
-        now = datetime.utcnow()
+        now = now_pk()
         if existing:
             window_start = existing['otp_requests_window_started_at']
             count = existing['otp_requests_count'] or 0
@@ -576,7 +583,7 @@ def register_verify_otp():
             release_db(conn)
             return jsonify({'success': False, 'message': 'Too many incorrect attempts. Please request a new OTP.'}), 429
 
-        if datetime.utcnow() > user['otp_expires_at']:
+        if now_pk() > user['otp_expires_at']:
             release_db(conn)
             return jsonify({'success': False, 'message': 'OTP expired. Please request a new one.'}), 400
 
@@ -702,7 +709,7 @@ def forgot_pin_request():
             release_db(conn)
             return jsonify({'success': False, 'message': 'No account found for this phone number.'}), 404
 
-        now = datetime.utcnow()
+        now = now_pk()
         window_start = user['otp_requests_window_started_at']
         count = user['otp_requests_count'] or 0
         if window_start and (now - window_start).total_seconds() < OTP_REQUEST_WINDOW_MIN * 60:
@@ -757,7 +764,7 @@ def forgot_pin_reset():
         if user['otp_attempts'] >= OTP_MAX_ATTEMPTS:
             release_db(conn)
             return jsonify({'success': False, 'message': 'Too many incorrect attempts. Please request a new OTP.'}), 429
-        if datetime.utcnow() > user['otp_expires_at']:
+        if now_pk() > user['otp_expires_at']:
             release_db(conn)
             return jsonify({'success': False, 'message': 'OTP expired. Please request a new one.'}), 400
         if not check_password_hash(user['otp_hash'], otp):
@@ -861,7 +868,7 @@ def chat_message():
             c.execute("""
                 INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at, sender)
                 VALUES (%s, %s, NULL, 'human_mode_message', %s, 'user')
-            """, (account_number, user_message, datetime.utcnow().isoformat()))
+            """, (account_number, user_message, now_pk().isoformat()))
             conn.commit()
             release_db(conn)
             return jsonify({
@@ -895,7 +902,7 @@ def chat_message():
             c.execute("""
                 INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (account_number, user_message, ai_response, 'cancelled', datetime.utcnow().isoformat()))
+            """, (account_number, user_message, ai_response, 'cancelled', now_pk().isoformat()))
             conn.commit()
             release_db(conn)
 
@@ -933,7 +940,7 @@ def chat_message():
                 )
                 c.execute(
                     "INSERT INTO fraud_alerts(account_number, message, created_at) VALUES (%s, %s, %s)",
-                    (account_number, "Emergency mode triggered by user.", datetime.utcnow().isoformat())
+                    (account_number, "Emergency mode triggered by user.", now_pk().isoformat())
                 )
                 conn.commit()
                 ai_response = chatbot.responses['emergency_confirm'][language]
@@ -957,7 +964,7 @@ def chat_message():
                 INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
                 VALUES (%s, %s, %s, %s, %s)
             """, (account_number, "[Password verification]", ai_response, 'emergency',
-                  datetime.utcnow().isoformat()))
+                  now_pk().isoformat()))
             conn.commit()
             release_db(conn)
 
@@ -983,7 +990,7 @@ def chat_message():
                     INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
                     VALUES (%s, %s, %s, %s, %s)
                 """, (account_number, "[Password verification]", ai_response, original_intent,
-                      datetime.utcnow().isoformat()))
+                      now_pk().isoformat()))
                 conn.commit()
                 release_db(conn)
 
@@ -1022,7 +1029,7 @@ def chat_message():
                             (account_number, transaction_type, description, amount, recipient, status, created_at, category)
                         VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, %s)
                     """, (account_number, f"Transfer to {recipient} ({transfer_method}, {purpose})", -amount,
-                          recipient_account, datetime.utcnow().isoformat(), description))
+                          recipient_account, now_pk().isoformat(), description))
                     conn.commit()
 
                     ai_response = chatbot.responses['transfer_success'][language].format(
@@ -1064,7 +1071,7 @@ def chat_message():
                              biller, bill_id, status, created_at)
                         VALUES (%s, 'bill', %s, %s, %s, %s, 'completed', %s)
                     """, (account_number, f"{bill_type} Bill Payment", -amount,
-                          service_provider, bill_account, datetime.utcnow().isoformat()))
+                          service_provider, bill_account, now_pk().isoformat()))
                     conn.commit()
 
                     ai_response = chatbot.responses['bill_payment_success'][language].format(
@@ -1095,12 +1102,12 @@ def chat_message():
                         INSERT INTO redemptions(account_number, points_used, reward_value, created_at)
                         VALUES (%s, %s, %s, %s)
                     """, (account_number, points_needed, redemption_choice,
-                          datetime.utcnow().isoformat()))
+                          now_pk().isoformat()))
                     c.execute("""
                         INSERT INTO dashboard_transactions
                             (account_number, transaction_type, description, amount, status, created_at)
                         VALUES (%s, 'redemption', 'Points Redemption', %s, 'completed', %s)
-                    """, (account_number, redemption_choice, datetime.utcnow().isoformat()))
+                    """, (account_number, redemption_choice, now_pk().isoformat()))
                     conn.commit()
 
                     ai_response = chatbot.responses['redeem_success'][language].format(
@@ -1114,7 +1121,7 @@ def chat_message():
                 INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
                 VALUES (%s, %s, %s, %s, %s)
             """, (account_number, "[Password verification]", ai_response, original_intent,
-                  datetime.utcnow().isoformat()))
+                  now_pk().isoformat()))
             conn.commit()
             release_db(conn)
 
@@ -1202,7 +1209,7 @@ def chat_message():
         c.execute("""
             INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
             VALUES (%s, %s, %s, %s, %s)
-        """, (account_number, user_message, ai_response, intent, datetime.utcnow().isoformat()))
+        """, (account_number, user_message, ai_response, intent, now_pk().isoformat()))
 
         conn.commit()
         release_db(conn)
@@ -1336,12 +1343,12 @@ def human_handoff():
             INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
             VALUES (%s, %s, %s, %s, %s)
         """, (account_number, "I want to talk to a human banker", ai_response,
-              'human_agent', datetime.utcnow().isoformat()))
+              'human_agent', now_pk().isoformat()))
 
         # Also raise the actual support ticket and flip this conversation into
         # human mode, so it shows up in the admin console (Support Tickets /
         # Live Chat Monitor) instead of only being logged in chat_history.
-        now = datetime.utcnow().isoformat()
+        now = now_pk().isoformat()
         c.execute("""
             INSERT INTO handoff_queue(account_number, reason, status, created_at)
             VALUES (%s, 'user_requested_human', 'pending', %s)
@@ -1384,7 +1391,7 @@ def emergency():
             INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
             VALUES (%s, %s, %s, %s, %s)
         """, (account_number, "EMERGENCY - Lock my cards!", ai_response,
-              'emergency', datetime.utcnow().isoformat()))
+              'emergency', now_pk().isoformat()))
         conn.commit()
         release_db(conn)
 
@@ -1824,7 +1831,7 @@ def execute_transfer():
                 'message': f'Insufficient funds. Amount: PKR {amount:,.0f} + Fee: PKR {fee:,.0f} = PKR {total_deducted:,.0f}'
             }), 400
 
-        now_iso       = datetime.utcnow().isoformat()
+        now_iso       = now_pk().isoformat()
         points_earned = int(amount // 1000) * 5
 
         # Mock a brief 1LINK network round-trip for bank transfers so the
@@ -1984,7 +1991,7 @@ def create_transaction():
             }), 400
 
         points_earned = int(amount // 1000) * 5
-        now_iso       = datetime.utcnow().isoformat()
+        now_iso       = now_pk().isoformat()
 
         if transaction_type == 'transfer':
             description = f"Transfer to {data.get('recipient', 'Unknown')}"
@@ -2287,7 +2294,7 @@ def api_add_points():
     due_date_str = data.get('due_date')
 
     if due_date_str:
-        today    = datetime.utcnow().date()
+        today    = now_pk().date()
         due_date = datetime.strptime(due_date_str, "%Y-%m-%d").date()
         if today > due_date:
             log_late_payment(acc, reason, due_date_str)
@@ -2333,7 +2340,9 @@ def api_reminders_inbox():
 
 @app.route('/insights/anomalies', methods=['GET'])
 def api_anomalies():
-    acc   = request.args.get('account')
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message' : 'Not authenticated'}), 401
+    acc   = session['account_number']
     items = detect_anomalies(acc)
     return jsonify({"account": acc, "anomalies": items})
 
@@ -2488,13 +2497,13 @@ def redeem_reward():
         c.execute("""
             INSERT INTO redemptions(account_number, points_used, reward_value, created_at)
             VALUES (%s, %s, %s, %s)
-        """, (account_number, points_cost, pkr_value, datetime.utcnow().isoformat()))
+        """, (account_number, points_cost, pkr_value, now_pk().isoformat()))
 
         c.execute("""
             INSERT INTO dashboard_transactions
                 (account_number, transaction_type, description, amount, status, created_at)
             VALUES (%s, 'redemption', %s, %s, 'completed', %s)
-        """, (account_number, description, pkr_value, datetime.utcnow().isoformat()))
+        """, (account_number, description, pkr_value, now_pk().isoformat()))
 
         conn.commit()
         release_db(conn)
@@ -2589,7 +2598,7 @@ def log_income():
         if amount <= 0:
             return jsonify({'success': False, 'message': 'Amount must be positive'}), 400
 
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_pk().isoformat()
         conn    = get_pg_conn(); c = conn.cursor()
 
         # 1. Record in income_transactions for advisor analytics
@@ -2822,7 +2831,7 @@ def link_bank():
         c.execute("""
             INSERT INTO bank_accounts(account_number, bank_name, iban, status, linked_at)
             VALUES (%s, %s, %s, 'pending', %s)
-        """, (account_number, bank, iban, datetime.utcnow().isoformat()))
+        """, (account_number, bank, iban, now_pk().isoformat()))
         conn.commit(); release_pg_conn(conn)
 
         return jsonify({
@@ -3015,7 +3024,7 @@ def spending_by_category_detailed():
 
     try:
         account_number = session['account_number']
-        now            = datetime.utcnow()
+        now            = now_pk()
         month_start    = datetime(now.year, now.month, 1).isoformat()
 
         conn = get_db(); c = conn.cursor()
