@@ -3038,25 +3038,3 @@ def spending_by_category_detailed():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-
-
-
-
-
-
-
-
-
-
-
-
-
-#for load testing
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
-
-app = FastAPI()
-
-@app.get("/loaderio-cad97a4ceaef4a4468b43e7743b8973a.txt", response_class=PlainTextResponse)
-def loaderio_verify():
-    return "loaderio-cad97a4ceaef4a4468b43e7743b8973a"
