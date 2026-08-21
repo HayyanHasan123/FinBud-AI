@@ -2342,7 +2342,7 @@ def api_reminders_inbox():
 def api_anomalies():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message' : 'Not authenticated'}), 401
-    acc   = request.args.get('account')
+    acc   = session['account_number']
     items = detect_anomalies(acc)
     return jsonify({"account": acc, "anomalies": items})
 
