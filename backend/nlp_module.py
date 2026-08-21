@@ -147,6 +147,71 @@ class Slot:
 
 
 INTENT_PATTERNS = {
+    # ── conversational (small talk / greetings) ────────────────────────────
+    # Checked FIRST so a casual "hi" / "kya haal hai" never falls through to
+    # 'unknown' or gets misread as a financial intent.
+    'conversational': [
+        r'^\s*(hi+|hello+|hey+|yo)\s*[!.?]*\s*$',
+        r'\b(hi|hello|hey)\s*(finbud|fin|there|bud)?\b',
+        r'\bassalam\s*[o0u]?\s*[-]?\s*alaikum\b',
+        r'\bassalam\s*u\s*alaikum\b',
+        r'\bas-?salam\s*o\s*alaikum\b',
+        r'\bwalaikum\s*[-]?\s*salam\b',
+        r'\bkya\s*(haal|hal)\s*(hai|ha)\b',
+        r'\bkaise\s*ho\b',
+        r'\bkesay\s*ho\b',
+        r'\bkya\s*hal\s*chaal\s*(hai)?\b',
+        r'\bhow\s*are\s*you\b',
+        r'\bhow\'?s\s*it\s*going\b',
+        r'\bwhat\'?s\s*up\b',
+        r'\bgood\s*(morning|evening|afternoon|night)\b',
+        r'\b(thanks|thank\s*you|shukriya|shukria)\b',
+        # Urdu script
+        r'السلام\s*علیکم',
+        r'وعلیکم\s*السلام',
+        r'کیا\s*حال\s*ہے',
+        r'کیسے\s*ہو',
+        r'کیا\s*حال\s*چال\s*ہے',
+        r'آداب',
+        r'شکریہ',
+    ],
+
+    # ── investment_advice (redirect to Fin, the Advisor bubble) ────────────
+    'investment_advice': [
+        r'\bwhere\s*(should|can|do)\s*i\s*invest\b',
+        r'\bhow\s*(should|can|do)\s*i\s*invest\b',
+        r'\b(mutual\s*funds?|stocks?|shares?|equities|bonds?)\b',
+        r'\bgrow\s*my\s*money\b',
+        r'\b(invest(ing|ment)?|investing)\b',
+        r'\bportfolio\b',
+        r'\bwealth\s*management\b',
+        r'\bsavings?\s*(plan|scheme)\b',
+        r'\bfinancial\s*advisor\b',
+        r'\b(paisa|paise|rakam|raqam)\s*(kahan|kaha)\s*invest\b',
+        r'\bsarmaya\s*kari\b',
+        r'\bsarmaya\s*kaari\b',
+        # Urdu script
+        r'سرمایہ\s*کاری',
+        r'میرے\s*پیسے\s*(کیسے|کہاں)\s*بڑھ',
+        r'(اسٹاک|شئیرز|میوچل\s*فنڈ)',
+    ],
+
+    # ── identity_query (who am I / what is my name) ─────────────────────────
+    'identity_query': [
+        r'\bwhat\'?s?\s*(is\s*)?my\s*name\b',
+        r'\bwho\s*am\s*i\b',
+        r'\bmera\s*naam\s*(kya\s*hai)?\b',
+        r'\bmeraa?\s*naam\b',
+        r'\bmy\s*(full\s*)?name\s*(kya\s*hai|please|batao|btao)?\b',
+        r'\bwhat\'?s?\s*my\s*(username|account\s*number)\b',
+        r'\bmera\s*account\s*number\s*(kya\s*hai)?\b',
+        r'\bmera\s*username\s*(kya\s*hai)?\b',
+        # Urdu script
+        r'میرا\s*نام\s*کیا\s*ہے',
+        r'میرا\s*نام',
+        r'میرا\s*اکاؤنٹ\s*نمبر',
+    ],
+
     # ── check_balance ────────────────────────────────────────────────────────
     'check_balance': [
         # Original Roman Urdu words (before slang substitution)
@@ -199,13 +264,19 @@ INTENT_PATTERNS = {
     'pay_bill': [
         # Original Roman Urdu words
         r'\b(bill|bijli|bijlee|bjili|bijly|pani|paani|gas|sui\s*gas|suigas|sui\s*gais)\b',
-        r'\b(electricity|k-electric|lesco|ptcl)\b',
+        r'\b(electricity|k-electric|k\s*electric|lesco|ptcl)\b',
+        r'\bke\s*bill\b',  # "ke bill" - K-Electric bill, short form (narrow to avoid matching the common Urdu particle "ke" on its own)
         r'\bbill\s*(pay|karo|karna|ada|bharo)\b',
         r'\b(bijli|bijlee|bjili|bijly|sui\s*gas|pani|paani)\s*ka\s*bill\b',
         r'\b(k-electric|lesco|ptcl|gas)\s*(ka\s*)?(bills?)\b',
         r'\bpay\s*(my\s*)?bills?\b',
         r'\butility\s*bills?\b',
         r'\bbilling\b',
+        # Water / gas / internet vernacular & providers
+        r'\b(ssgc|sngpl|kwsb)\b',
+        r'\b(net|internet|wifi|wi-fi)\s*(bill|pay|ka)?\b',
+        r'\b(stormfiber|storm\s*fiber|nayatel)\b',
+        r'\bpower\s*bill\b',
         # Normalized English equivalents
         r'\belectricity\s*(bill|pay|ka)?\b',
         r'\bwater\s*(bill|pay|ka)?\b',
@@ -213,7 +284,7 @@ INTENT_PATTERNS = {
         r'\bpay\s*(electricity|water|gas|internet)\b',
         # Urdu script
         r'بل\s*(ادا\s*کر[وؤ]|جمع\s*کر[وؤ]|بھر[وؤ]|pay)',
-        r'(بجلی|گیس|پانی|انٹرنیٹ)\s*(کا\s*)?بل',
+        r'(بجلی|گیس|پانی|انٹرنیٹ|وائی\s*فائی)\s*(کا\s*)?بل',
         r'(k-electric|lesco|ptcl|sui\s*گیس)\s*(کا\s*)?بل',
         r'یوٹیلیٹی\s*بل',
     ],
@@ -328,6 +399,9 @@ INTENT_PATTERNS = {
 CANCEL_PATTERNS = [
     r'^\s*cancel\s*$',
     r'^\s*stop\s*$',
+    r'^\s*abort\s*$',
+    r'^\s*exit\s*$',
+    r'^\s*close\s*$',
     r'^\s*ruko\s*$',
     r'\bruko\b',
     r'\brok\s*do\b',
@@ -336,6 +410,21 @@ CANCEL_PATTERNS = [
     r'\bnevermind\b',
     r'\bchore?d?o?\s*do\b',  # "chor do" - leave it / drop it
     r'\bband\s*kar\s*do\b(?!\s*card)',  # "band kar do" (stop), but NOT "band kar do card" (card-block emergency)
+    r'\brehne\s*do\b',        # "rehne do" - leave it / never mind
+    r'\bkhatam\s*karo\b',     # "khatam karo" - end it
+    r'\bmat\s*karo\b',        # "mat karo" - don't do it
+]
+
+# Global cancel replies that are ONLY safe to treat as cancellation when we
+# are sitting at a *_AWAIT_CONFIRMATION step - a bare "no" or "nahi" earlier
+# in a flow (e.g. answering "no thanks" to something unrelated mid-collection)
+# is too ambiguous to treat as a full cancel, but at the yes/no confirmation
+# gate it unambiguously means "don't proceed". Kept separate from
+# CANCEL_PATTERNS (which fire on every turn regardless of state) so these
+# stay scoped to handle_confirmation_step's NEGATIVE_PATTERNS branch.
+CONFIRMATION_CANCEL_TOKENS = [
+    'cancel', 'stop', 'abort', 'nahi', 'no', 'rehne do', 'khatam karo',
+    'mat karo', 'close', 'exit', 'nhi',
 ]
 
 # Edit-previous-step trigger patterns.
@@ -359,6 +448,13 @@ EDIT_PREVIOUS_PATTERNS = [
     r'\bpeeche\s*jao\b',       # "peeche jao" - go back
     r'\bnahi\s*,?\s*woh\b',    # "nahi, woh..." - no, that.../the other one
     r'\bghalti\s*se\b',        # "ghalti se" - by mistake
+    r'\bchange\b',
+    r'\bbadlo\b',
+    r'\bcorrect\b',
+    r'\bupdate\b',
+    r'\bsahi\s*karo\b',
+    r'\bdobara\b',
+    r'\bmodify\b',
 ]
 
 # Contextual help trigger patterns.
@@ -379,7 +475,9 @@ AFFIRMATIVE_PATTERNS = [
 ]
 NEGATIVE_PATTERNS = [
     r'^\s*no\s*$', r'^\s*n\s*$', r'^\s*nah\s*$', r'^\s*nahi\s*n?\s*$',
-    r'^\s*nope\s*$', r'^\s*cancel\s*$', r'^\s*galat\s*$',
+    r'^\s*nhi\s*$', r'^\s*nope\s*$', r'^\s*cancel\s*$', r'^\s*galat\s*$',
+    r'^\s*rehne\s*do\s*$', r'^\s*khatam\s*karo\s*$', r'^\s*mat\s*karo\s*$',
+    r'^\s*abort\s*$', r'^\s*exit\s*$', r'^\s*close\s*$',
 ]
 
 # ── SLANG_MAPPING ─────────────────────────────────────────────────────────
@@ -399,10 +497,21 @@ SLANG_MAPPING = {
     'pani': 'water',
     'paani': 'water',
     'paane': 'water',
+    'kwsb': 'water',
     # Gas
     'sui gas': 'gas',
     'suigas': 'gas',
     'sui gais': 'gas',
+    # Internet (generic vernacular only - provider NAMES like ptcl,
+    # stormfiber, nayatel, ssgc, sngpl, lesco, k-electric are deliberately
+    # NOT normalized here, since extract_service_provider / BILL_CATEGORY_MAP
+    # need the literal provider name to survive normalize_slang intact in
+    # order to identify which specific provider was named; the generic
+    # bill_map/BILL_CATEGORY_MAP already recognize those provider keywords
+    # directly without needing a SLANG_MAPPING detour).
+    'net': 'internet',
+    'wifi': 'internet',
+    'wi-fi': 'internet',
     # Send / transfer verbs — bhej* family
     'bhejo': 'send',
     'bhej': 'send',
@@ -511,6 +620,31 @@ RESPONSES = {
         'en': "I didn't understand that. Try:\n• Check balance\n• Send money\n• Pay bills",
         'ur': "معذرت، میں سمجھ نہیں سکا",
         'ru': "Maafi, main samajh nahi saka. Try karein:\n• Balance check karein\n• Paisa bhejein\n• Bill pay karein"
+    },
+    'conversational': {
+        'en': "I'm doing great, thanks for asking! 😊 How can I help with your banking today?",
+        'ur': "میں بالکل ٹھیک ہوں، پوچھنے کا شکریہ! 😊 میں آپ کی بینکنگ میں کیسے مدد کر سکتا ہوں؟",
+        'ru': "Main bilkul theek hoon, poochne ka shukriya! 😊 Aap ki banking mein kaise madad kar sakta hoon?"
+    },
+    'investment_redirect': {
+        'en': "Great question! For personalized investment and wealth-growth guidance, I'd recommend chatting with Fin, our dedicated financial advisor. Tap the Advisor bubble to get started. 📈",
+        'ur': "بہترین سوال! ذاتی نوعیت کی سرمایہ کاری اور دولت میں اضافے کی رہنمائی کے لیے، ہمارے مخصوص مالیاتی مشیر Fin سے بات کریں۔ شروع کرنے کے لیے Advisor بلبلے پر ٹیپ کریں۔ 📈",
+        'ru': "Bohat acha sawal! Investment aur wealth growth ki personalized guidance ke liye, hamare dedicated financial advisor Fin se baat karein. Shuru karne ke liye Advisor bubble par tap karein. 📈"
+    },
+    'identity_name': {
+        'en': "Your name on file is {full_name}. 👋",
+        'ur': "آپ کا رجسٹرڈ نام \u2066{full_name}\u2069 ہے۔ 👋",
+        'ru': "Aap ka registered naam {full_name} hai. 👋"
+    },
+    'identity_account_number': {
+        'en': "Your account number is {account_number}.",
+        'ur': "آپ کا اکاؤنٹ نمبر \u2066{account_number}\u2069 ہے۔",
+        'ru': "Aap ka account number {account_number} hai."
+    },
+    'identity_unknown': {
+        'en': "I couldn't find your account details right now. Please try again in a moment.",
+        'ur': "میں ابھی آپ کی اکاؤنٹ کی تفصیلات تلاش نہیں کر سکا۔ براۓ کرم دوبارہ کوشش کریں۔",
+        'ru': "Main abhi aap ki account details nahi dhoond saka. Barah-e-karam dobara koshish karein."
     },
     'check_balance': {
         'en': "Your balance is RS {balance:,}",
@@ -1409,6 +1543,31 @@ def validate_account_number(text: str) -> Optional[str]:
     return None
 
 
+def extract_embedded_account_number(text: str) -> Optional[str]:
+    """
+    Loosely pull an account number that's embedded inside a full sentence
+    (as opposed to a bare, account-number-only reply like the
+    `validate_account_number` extractor expects). Only fires when an
+    explicit "account"/"acc"/"a/c" label directly precedes the token, so
+    it stays conservative and never mistakes an amount or a name for an
+    account number. Used exclusively by the multi-slot single-pass merge
+    in `run_flow_step` so a message like "Send 5000 to Ali account
+    123456" fills every slot in one turn instead of re-prompting for the
+    account number/identifier the user already gave.
+    """
+    match = re.search(
+        r'\b(?:account|acc|a\/c)\.?\s*(?:number|no\.?|#)?\s*[:\-]?\s*'
+        r'([A-Za-z0-9]{6,20})\b',
+        text, re.IGNORECASE,
+    )
+    if not match:
+        return None
+    candidate = match.group(1).upper()
+    if 6 <= len(candidate) <= 20 and any(c.isdigit() for c in candidate):
+        return candidate
+    return None
+
+
 def extract_bill_type(text: str) -> Optional[str]:
     """Extract bill type from text"""
     normalized = normalize_slang(text.lower())
@@ -1416,14 +1575,27 @@ def extract_bill_type(text: str) -> Optional[str]:
     bill_map = {
         'electricity': 'Electricity',
         'k-electric': 'Electricity',
+        'k electric': 'Electricity',
         'lesco': 'Electricity',
         'bijli': 'Electricity',
         'electric': 'Electricity',
+        'power bill': 'Electricity',
         'gas': 'Gas',
+        'sui gas': 'Gas',
+        'ssgc': 'Gas',
+        'sngpl': 'Gas',
         'ptcl': 'Internet',
         'internet': 'Internet',
+        'net': 'Internet',
+        'wifi': 'Internet',
+        'wi-fi': 'Internet',
+        'stormfiber': 'Internet',
+        'storm fiber': 'Internet',
+        'nayatel': 'Internet',
         'water': 'Water',
         'pani': 'Water',
+        'paani': 'Water',
+        'kwsb': 'Water',
     }
 
     for key, value in bill_map.items():
@@ -1448,6 +1620,7 @@ BILL_CATEGORY_MAP = {
     'bijli': 'Electricity',
     'bijlee': 'Electricity',
     'electric': 'Electricity',
+    'power bill': 'Electricity',
     'gas': 'Gas',
     'sui gas': 'Gas',
     'suigas': 'Gas',
@@ -1459,6 +1632,9 @@ BILL_CATEGORY_MAP = {
     'stormfiber': 'Internet',
     'storm fiber': 'Internet',
     'nayatel': 'Internet',
+    'net': 'Internet',
+    'wifi': 'Internet',
+    'wi-fi': 'Internet',
 }
 
 SERVICE_PROVIDER_MAP = {
@@ -1819,6 +1995,22 @@ FLOW_SLOTS = {
     'pay_bill': BILL_SLOTS,
 }
 
+# Per-slot extractor overrides used ONLY by the multi-slot single-pass merge
+# in `run_flow_step` (see `_merge_multi_slot_extraction` below). Some slot
+# extractors (like `extract_transfer_identifier`, which falls back to the
+# deliberately strict `validate_account_number`) are tuned for parsing a
+# bare, single-purpose reply (e.g. the user's entire message when we're
+# sitting in TRANSFER_AWAIT_IDENTIFIER is just "123456"). That strictness
+# makes them reject a full free-form sentence like "Send 5000 to Ali
+# account 123456" where the same value is embedded alongside other words.
+# These overrides supply a looser, sentence-aware extractor for exactly
+# that merge-pass use case, without touching the strict extractor used for
+# the normal single-slot turn (so standalone-reply validation behavior is
+# completely unchanged).
+MULTI_SLOT_EXTRACTOR_OVERRIDES = {
+    ('transfer_money', 'transfer_identifier'): extract_embedded_account_number,
+}
+
 # Help-template key for each (flow, slot) pair - used by the contextual
 # help interceptor.
 HELP_KEY_FOR_SLOT = {
@@ -2149,26 +2341,35 @@ def handle_confirmation_step(user_message: str, ctx: Dict, language: str) -> Dic
         return _enter_password_state(current_flow, ctx, language)
 
     if _matches_any(normalized, NEGATIVE_PATTERNS):
-        # Route to edit-previous-step logic automatically on "no".
-        edit_result = try_handle_edit_previous("actually go back", ctx)
-        if edit_result is not None:
-            return edit_result
-        # Fallback: shouldn't normally happen since all slots are filled
-        # by the time we reach confirmation, but guard anyway.
-        fallback_result = {
-            'intent': current_flow,
+        # A "no"/"nahi"/"rehne do" etc. AT THE CONFIRMATION GATE is an
+        # unambiguous cancellation, not an edit request - the user is
+        # declining to proceed with the transaction as summarized, not
+        # asking to tweak one field of it. Previously this branch routed
+        # into try_handle_edit_previous(), which misread "nahi"/"rehne do"
+        # as an edit trigger (since those tokens can ALSO appear in
+        # EDIT_PREVIOUS_PATTERNS-adjacent phrasing) and left the flow
+        # dangling instead of cleanly exiting it. Build the same
+        # 'cancelled' result shape check_global_controls() produces so the
+        # cancellation is consistent regardless of which layer catches it.
+        cancel_key_map = {
+            'transfer_money': 'global_cancel_transfer',
+            'pay_bill': 'global_cancel_bill',
+            'redeem_points': 'global_cancel_redeem',
+        }
+        response_key = cancel_key_map.get(current_flow, 'global_cancel_generic')
+        return {
+            'intent': 'cancelled',
             'language': language,
             'entities': {},
-            'needs_clarification': True,
+            'needs_clarification': False,
             'clarification_type': None,
             'requires_human': False,
             'handoff_reason': None,
             'normalized_text': normalized,
-            'ai_response': RESPONSES['edit_nothing_to_edit'][language],
-            **_passthrough_flow_fields(ctx),
+            'ai_response': RESPONSES[response_key][language],
+            'cancelled_flow': current_flow,
+            'flow_state': FlowState.IDLE.name,
         }
-        fallback_result['flow_state'] = FLOW_CONFIRMATION_STATE[current_flow].name
-        return fallback_result
 
     # Ambiguous - re-prompt for confirmation without guessing or falling
     # through to any other logic.
@@ -2261,6 +2462,51 @@ def _enter_password_state(current_flow: str, ctx: Dict, language: str) -> Dict:
     }
 
 
+def _merge_multi_slot_extraction(current_flow: str, user_message: str, ctx: Dict,
+                                  slot_order: List[str], slots: Dict[str, Slot]) -> Tuple[Dict, bool]:
+    """
+    Attempts to fill every still-missing slot for `current_flow` out of a
+    SINGLE user message, before the caller decides which slot (if any) is
+    still outstanding. This is what lets a message like "Send 5000 to Ali
+    account ABC12345678 for rent" fill amount + recipient + identifier +
+    purpose in one pass instead of re-prompting for slots the user has
+    already supplied.
+
+    Generic, flow-agnostic: walks every slot in `slot_order`, tries the
+    slot's normal extractor (or a looser override from
+    MULTI_SLOT_EXTRACTOR_OVERRIDES when one exists for a slot that's
+    ordinarily strict about bare, single-purpose replies), and accepts
+    the result if it passes the slot's validator (if any). Each slot is
+    evaluated independently against the *original* message, so slot
+    extractors that are already keyword/pattern-specific (bill category,
+    provider, purpose, description, transfer method, etc.) never interfere
+    with one another.
+
+    Returns (possibly-updated ctx copy, whether anything changed).
+    """
+    merged_ctx = dict(ctx)
+    any_merged = False
+
+    for slot_name in slot_order:
+        if merged_ctx.get(slot_name):
+            continue
+        extractor_fn = MULTI_SLOT_EXTRACTOR_OVERRIDES.get(
+            (current_flow, slot_name), slots[slot_name].extractor
+        )
+        try:
+            candidate = extractor_fn(user_message)
+        except Exception:
+            candidate = None
+        validator_fn = slots[slot_name].validator
+        if candidate is not None and validator_fn and not validator_fn(candidate):
+            candidate = None
+        if candidate is not None:
+            merged_ctx[slot_name] = candidate
+            any_merged = True
+
+    return merged_ctx, any_merged
+
+
 def run_flow_step(user_message: str, ctx: Dict, language: str,
                    force_flow: Optional[str] = None,
                    skip_extraction: bool = False) -> Dict:
@@ -2273,6 +2519,35 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
     # on this turn).  This ensures every response from run_flow_step is
     # already in the locked language without the caller needing to patch it.
     effective_language = ctx.get('session_language') or language
+
+    # ── Unified single-pass multi-slot extraction ─────────────────────────
+    # Try to pull EVERY still-missing slot out of this one message before
+    # deciding what's still needed, so providing several details at once
+    # ("Send 5000 to Ali account ABC12345678 for rent") - or filling them
+    # in over several turns - never re-prompts for a slot that's already
+    # been supplied. Only runs on a real user turn (not the empty-message
+    # recursive re-entry calls this function makes internally, and not
+    # when the caller already extracted the value itself via
+    # skip_extraction=True).
+    any_merged = False
+    if not skip_extraction and user_message and current_flow == 'transfer_money':
+        # Restricted to transfer_money: its slot extractors (recipient,
+        # transfer_method, transfer_identifier via the embedded-account
+        # override, purpose, description) are all either keyword-based or
+        # already sentence-aware, so running them independently against
+        # the same full message is safe. pay_bill's bill_reference
+        # extractor, by contrast, is deliberately permissive (it grabs
+        # any 4-20 char alphanumeric token so real-world reference
+        # numbers are never missed) and would risk mis-capturing a bare
+        # amount as the reference if run blindly against a full sentence
+        # that also contains one - so pay_bill keeps the original
+        # single-slot-per-turn extraction below instead of opting into
+        # this merge pass.
+        merged_ctx, any_merged = _merge_multi_slot_extraction(
+            current_flow, user_message, ctx, slot_order, slots
+        )
+        if any_merged:
+            ctx = merged_ctx
 
     # Find the first not-yet-filled slot.
     target_slot = None
@@ -2308,12 +2583,22 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
 
     slot_def = slots[target_slot]
 
-    if skip_extraction:
-        # Used by the inline-edit path: the value was already extracted
-        # and placed into ctx by the caller, so this call's only job is to
-        # figure out what comes next (which may itself be "all filled").
-        # We re-enter with target_slot artificially treated as filled by
-        # recursing once the caller has set ctx[target_slot].
+    if skip_extraction or any_merged:
+        # Used by the inline-edit path (skip_extraction=True): the value
+        # was already extracted and placed into ctx by the caller.
+        #
+        # Also taken whenever the multi-slot merge pass above filled ANY
+        # slot from this message (any_merged=True): that message has
+        # already been "spent" extracting whatever it could, and
+        # target_slot has moved on to a slot the message was never about
+        # (e.g. merge fills 'recipient' from "Ali", target_slot advances
+        # to 'transfer_method' - re-running "Ali" through the transfer
+        # method extractor below would just re-prompt anyway, but this
+        # keeps the two code paths from doing redundant/conflicting
+        # extraction on the same message). Either way, re-enter with an
+        # empty message so the caller only ever sees a normal "please
+        # provide X" prompt for whatever's still missing, never a
+        # spurious invalid-value error.
         return run_flow_step(user_message="", ctx=ctx, language=language,
                               force_flow=current_flow, skip_extraction=False)
 
@@ -2750,6 +3035,68 @@ class BankAIConversation:
                 'handoff_reason': None,
                 'normalized_text': normalize_slang(user_message),
                 'ai_response': RESPONSES['greeting'][language],
+            }
+
+        if intent == 'conversational':
+            return {
+                'intent': 'conversational',
+                'language': language,
+                'session_language': language,
+                'entities': {},
+                'needs_clarification': False,
+                'clarification_type': None,
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalize_slang(user_message),
+                'ai_response': RESPONSES['conversational'][language],
+            }
+
+        if intent == 'investment_advice':
+            return {
+                'intent': 'investment_advice',
+                'language': language,
+                'session_language': language,
+                'entities': {},
+                'needs_clarification': False,
+                'clarification_type': None,
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalize_slang(user_message),
+                'ai_response': RESPONSES['investment_redirect'][language],
+                # Structured signal so the frontend can render a CTA that
+                # opens the dedicated AdvisorChatBubble ("Fin") instead of
+                # handling wealth/investment questions generically here.
+                'redirect_to_advisor': True,
+            }
+
+        if intent == 'identity_query':
+            user_identity = ctx.get('user_identity') or {}
+            full_name = user_identity.get('full_name')
+            account_number = user_identity.get('account_number')
+            normalized_id_text = normalize_slang(user_message)
+            wants_account_number = bool(re.search(
+                r'\baccount\s*number\b|\bacc(?:ount)?\s*no\b|اکاؤنٹ\s*نمبر',
+                user_message, re.IGNORECASE
+            ))
+            if wants_account_number and account_number:
+                ai_response = RESPONSES['identity_account_number'][language].format(
+                    account_number=account_number
+                )
+            elif full_name:
+                ai_response = RESPONSES['identity_name'][language].format(full_name=full_name)
+            else:
+                ai_response = RESPONSES['identity_unknown'][language]
+            return {
+                'intent': 'identity_query',
+                'language': language,
+                'session_language': language,
+                'entities': {'full_name': full_name, 'account_number': account_number},
+                'needs_clarification': False,
+                'clarification_type': None,
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalized_id_text,
+                'ai_response': ai_response,
             }
 
         # ── Hybrid LLM Fallback ───────────────────────────────────────────────
