@@ -21,6 +21,7 @@ from psycopg2 import pool as psycopg2_pool
 
 import os
 from datetime import datetime, date
+from timezone_utils import now_pk, today_pk
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -218,7 +219,7 @@ def log_late_payment(account, reason, due_date):
     conn = get_pg_conn(); c = conn.cursor()
     c.execute(
         "INSERT INTO late_payments(account_number, reason, due_date, paid_on) VALUES (%s, %s, %s, %s)",
-        (account, reason, due_date, datetime.now().date().isoformat())
+        (account, reason, due_date, now_pk().date().isoformat())
     )
     conn.commit(); release_pg_conn(conn)
 
@@ -270,7 +271,7 @@ def add_bill(account, biller, amount, due_date, ref=None):
         INSERT INTO bills(account_number, biller, amount, due_date, status, paid_on, ref, created_at)
         VALUES (%s, %s, %s, %s, 'unpaid', NULL, %s, %s)
         RETURNING id
-    """, (account, biller, float(amount), due_date, ref, datetime.utcnow().isoformat()))
+    """, (account, biller, float(amount), due_date, ref, now_pk().isoformat()))
     bill_id = c.fetchone()['id']
     conn.commit(); release_pg_conn(conn)
     return bill_id
@@ -287,13 +288,13 @@ def save_paid_bill_ref(account, biller, amount, ref):
     """
     if not ref:
         return None
-    today = date.today().isoformat()
+    today = today_pk().isoformat()
     conn = get_pg_conn(); c = conn.cursor()
     c.execute("""
         INSERT INTO bills(account_number, biller, amount, due_date, status, paid_on, ref, created_at)
         VALUES (%s, %s, %s, %s, 'paid', %s, %s, %s)
         RETURNING id
-    """, (account, biller, float(amount), today, today, ref, datetime.utcnow().isoformat()))
+    """, (account, biller, float(amount), today, today, ref, now_pk().isoformat()))
     bill_id = c.fetchone()['id']
     conn.commit(); release_pg_conn(conn)
     return bill_id
@@ -301,7 +302,7 @@ def save_paid_bill_ref(account, biller, amount, ref):
 
 def mark_paid(account, bill_id=None, biller=None, due_date=None, paid_on=None):
     if paid_on is None:
-        paid_on = date.today().isoformat()
+        paid_on = today_pk().isoformat()
     conn = get_pg_conn(); c = conn.cursor()
     if bill_id:
         c.execute(
@@ -319,7 +320,7 @@ def mark_paid(account, bill_id=None, biller=None, due_date=None, paid_on=None):
 
 def list_pending(account, within_days=30, today=None):
     if today is None:
-        today = date.today()
+        today = today_pk()
     conn = get_pg_conn(); c = conn.cursor()
     c.execute(
         "SELECT id, biller, amount, due_date FROM bills WHERE account_number=%s AND status='unpaid'",
@@ -360,7 +361,7 @@ def _build_message(biller, amount, due_date, days_left, kind):
 
 
 def generate_reminders(today_str=None):
-    today = datetime.strptime(today_str, "%Y-%m-%d").date() if today_str else date.today()
+    today = datetime.strptime(today_str, "%Y-%m-%d").date() if today_str else today_pk()
     conn  = get_pg_conn(); c = conn.cursor()
     c.execute("SELECT id, account_number, biller, amount, due_date FROM bills WHERE status='unpaid'")
     rows = c.fetchall(); out = []
@@ -380,7 +381,7 @@ def generate_reminders(today_str=None):
                     INSERT INTO reminders_log
                         (account_number, bill_id, kind, message, due_date, days_left, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (acc, bill_id, kind, msg, due, days_left, datetime.utcnow().isoformat()))
+                """, (acc, bill_id, kind, msg, due, days_left, now_pk().isoformat()))
             out.append({
                 "account":  acc, "bill_id": bill_id, "kind": kind,
                 "message":  msg, "due_date": due,    "days_left": days_left
@@ -480,18 +481,15 @@ def detect_anomalies(account):
 
     # Pull last 60 days of debit transactions for this account
     sixty_days_ago = datetime(
-        datetime.utcnow().year,
-        datetime.utcnow().month,
+        now_pk().year,
+        now_pk().month,
         1
     ).isoformat()
-    # Use a proper 60-day cutoff in Python to avoid SQL interval quirks
-    today     = datetime.utcnow()
-    cut_month = today.month - 2
-    cut_year  = today.year
-    while cut_month <= 0:
-        cut_month += 12
-        cut_year  -= 1
-    cutoff_60 = datetime(cut_year, cut_month, today.day).isoformat()
+        # Proper 60-day cutoff — a plain timedelta, so it's always exactly 60
+    # days back regardless of month length, and can never crash on a
+    # day-number that doesn't exist in a shorter month (e.g. Aug 31 → June).
+    from datetime import timedelta
+    cutoff_60 = (now_pk() - timedelta(days=60)).isoformat()
 
     c.execute("""
         SELECT id, amount, description, created_at
@@ -568,7 +566,7 @@ def create_ticket(account, reason, meta=None):
         INSERT INTO handoff_queue(account_number, reason, status, created_at)
         VALUES (%s, %s, 'pending', %s)
         RETURNING id
-    """, (account, reason, datetime.utcnow().isoformat()))
+    """, (account, reason, now_pk().isoformat()))
     ticket_id = c.fetchone()['id']
 
     # put conversation in human mode (unassigned yet)
@@ -577,7 +575,7 @@ def create_ticket(account, reason, meta=None):
         VALUES (%s, 'human', NULL, %s)
         ON CONFLICT(account_number) DO UPDATE SET
             mode='human', assigned_to=NULL, updated_at=EXCLUDED.updated_at
-    """, (account, datetime.utcnow().isoformat()))
+    """, (account, now_pk().isoformat()))
 
     conn.commit(); release_pg_conn(conn)
     return ticket_id
@@ -614,7 +612,7 @@ def claim(ticket_id, banker_id):
         VALUES (%s, 'human', %s, %s)
         ON CONFLICT(account_number) DO UPDATE SET
             mode='human', assigned_to=EXCLUDED.assigned_to, updated_at=EXCLUDED.updated_at
-    """, (acc, banker_id, datetime.utcnow().isoformat()))
+    """, (acc, banker_id, now_pk().isoformat()))
 
     conn.commit(); release_pg_conn(conn)
     return True
@@ -633,7 +631,7 @@ def resolve(ticket_id):
             VALUES (%s, 'bot', NULL, %s)
             ON CONFLICT(account_number) DO UPDATE SET
                 mode='bot', assigned_to=NULL, updated_at=EXCLUDED.updated_at
-        """, (acc, datetime.utcnow().isoformat()))
+        """, (acc, now_pk().isoformat()))
 
     conn.commit(); release_pg_conn(conn)
     return True
@@ -652,7 +650,7 @@ def cancel(ticket_id):
             VALUES (%s, 'bot', NULL, %s)
             ON CONFLICT(account_number) DO UPDATE SET
                 mode='bot', assigned_to=NULL, updated_at=EXCLUDED.updated_at
-        """, (acc, datetime.utcnow().isoformat()))
+        """, (acc, now_pk().isoformat()))
 
     conn.commit(); release_pg_conn(conn)
     return True
@@ -682,7 +680,7 @@ def alert_fraud_team(account, message):
     conn = get_pg_conn(); c = conn.cursor()
     c.execute(
         "INSERT INTO fraud_alerts(account_number, message, created_at) VALUES (%s, %s, %s)",
-        (account, message, datetime.utcnow().isoformat())
+        (account, message, now_pk().isoformat())
     )
     conn.commit(); release_pg_conn(conn)
 
@@ -803,24 +801,50 @@ def get_redemption_tier(tier_name):
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ---------- INCOME SERVICE ----------
+
 def get_income_vs_expense(account):
     """
-    Returns this calendar month's income, expenses, savings target,
-    investment amount, and safe-to-spend for the given account.
+    Returns this calendar month's income, expenses, net surplus, and
+    budget recommendations for the given account.
 
-    Formula (per mentor feedback — MoM Session 3):
-        safe_to_spend = income - expenses - savings_target - investment_amount
+    Formula (hybrid model — targets anchored to income, capped by surplus):
 
-    Savings target  = 20% of income  (50/30/20 rule)
-    Investment amount = 10% of income (basic investment pocket)
+        target_savings     = 15% of income   (matches the standard 50/30/20
+                                               rule's savings/debt-payoff share)
+        target_investment   = 5% of income    (kept separate from savings so
+                                               the two can be shown/tracked
+                                               individually in the UI)
+        target_total        = target_savings + target_investment  (= 20% of income)
+        net                 = max(income - expenses, 0)
+
+        If net >= target_total:
+            → user can comfortably hit both targets this month. Targets
+              stay fixed at their standard 15%/5% of income (not inflated
+              by a windfall month), and anything left over becomes extra
+              safe_to_spend.
+        If net < target_total:
+            → user can't fully fund both targets this month. Scale both
+              down proportionally (preserving the 3:1 savings:investment
+              ratio) so the recommendation never exceeds what's actually
+              available, and safe_to_spend is 0.
+        If net == 0:
+            → all three values cleanly default to 0.0.
+
+    Using 15%/5% (rather than a higher split) keeps the total in line with
+    the widely-cited 50/30/20 rule's 20% savings/debt-payoff share, so the
+    recommendation is a defensible standard default rather than an
+    arbitrary number — while the income-anchored + surplus-capped hybrid
+    logic still avoids the two failure modes of a naive percentage split:
+    a tight month asking for money that isn't there, and a windfall month
+    producing an artificially inflated savings target.
 
     Response keys:
-        income, expenses, savings_target, investment_amount,
-        net, safe_to_spend
+        income, expenses, net, safe_to_spend,
+        savings_target, investment_amount
     """
     conn = get_pg_conn(); c = conn.cursor()
 
-    now         = datetime.utcnow()
+    now         = now_pk()
     month_start = datetime(now.year, now.month, 1).isoformat()
 
     # Total income this month
@@ -841,23 +865,41 @@ def get_income_vs_expense(account):
 
     release_pg_conn(conn)
 
-    # 50/30/20 rule — savings 20%, investment 10%
-    savings_target    = round(income * 0.20, 2)
-    investment_amount = round(income * 0.10, 2)
+    # Net surplus this month — never negative.
+    net = max(round(income - expenses, 2), 0)
 
-    # Net = income - expenses (no deductions)
-    net = round(income - expenses, 2)
+    # Standard targets, anchored to income (not surplus) — stable and
+    # defensible regardless of how good or bad this particular month was.
+    target_savings    = round(income * 0.15, 2)
+    target_investment = round(income * 0.05, 2)
+    target_total       = round(target_savings + target_investment, 2)
 
-    # Safe to spend = what is actually left after saving and investing
-    safe_to_spend = round(income - expenses - savings_target - investment_amount, 2)
+    if net <= 0:
+        # No surplus at all this month.
+        savings_target     = 0.0
+        investment_amount  = 0.0
+        safe_to_spend        = 0.0
+    elif net >= target_total:
+        # Comfortable month — hit both targets exactly, extra surplus is
+        # free to spend rather than inflating the savings/investment ask.
+        savings_target     = target_savings
+        investment_amount  = target_investment
+        safe_to_spend        = round(net - target_total, 2)
+    else:
+        # Tight month — can't fully fund both targets. Scale both down
+        # proportionally (keeping the 3:1 savings:investment ratio) so
+        # the ask never exceeds what's actually available.
+        savings_target     = round(net * (target_savings / target_total), 2)
+        investment_amount  = round(net * (target_investment / target_total), 2)
+        safe_to_spend        = 0.0
 
     return {
         'income':            round(income, 2),
         'expenses':          round(expenses, 2),
-        'savings_target':    savings_target,
-        'investment_amount': investment_amount,
         'net':               net,
-        'safe_to_spend':     max(safe_to_spend, 0)  # never show negative
+        'safe_to_spend':     safe_to_spend,
+        'savings_target':    savings_target,
+        'investment_amount': investment_amount
     }
 
 
@@ -868,7 +910,7 @@ def get_income_by_source(account):
     """
     conn = get_pg_conn(); c = conn.cursor()
 
-    now         = datetime.utcnow()
+    now         = now_pk()
     month_start = datetime(now.year, now.month, 1).isoformat()
 
     c.execute("""
@@ -894,7 +936,7 @@ def get_monthly_trend(account, months=6):
 
     # Calculate the cutoff date in pure Python to avoid SQL INTERVAL
     # parameterization quirks in psycopg2.
-    today = datetime.utcnow()
+    today = now_pk()
     cutoff_month = today.month - months
     cutoff_year  = today.year
     while cutoff_month <= 0:
@@ -993,7 +1035,7 @@ def generate_credit_score(account):
     balance = float(row['balance']) if row else 0.0
 
     # 3. Transaction count over the last 6 calendar months
-    today       = datetime.utcnow()
+    today       = now_pk()
     cut_month   = today.month - 6
     cut_year    = today.year
     while cut_month <= 0:
