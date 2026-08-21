@@ -6,9 +6,11 @@ This module is called by nlp_module.py ONLY when the regex engine
 returns intent='unknown' OR when a slot extractor returns None during
 an active flow.
 
-It uses Llama 3 (via Groq API) to:
+
+It uses OpenAI (via Groq API) to:
   1. Classify the intent from the same set of intents the regex uses
-  2. Extract slot values (amount, recipient, account_number, etc.)
+  2. Extract slot values (amount, phone_number, account_number, etc.)
+     — NEVER a recipient/payee name for transfer_money or bill_payments
   3. Generate a conversational reply when neither regex nor a known
      banking intent applies (e.g. "what is a SWIFT code?")
 
@@ -59,10 +61,16 @@ VALID_INTENTS = [
     'general_chat',   # NEW: for conversational replies the regex has no template for
 ]
 
-# Valid slot keys the LLM is allowed to extract
+# Valid slot keys the LLM is allowed to extract.
+# NOTE: 'recipient' is intentionally NOT here. For transfer_money and
+# bill_payments, the LLM must never extract, guess, or be asked for a
+# recipient/payee name - only the target phone number and amount. The
+# recipient's name is always resolved server-side via a PostgreSQL lookup
+# on the phone number (see nlp_module.set_recipient_resolver /
+# app.py:lookup_account_by_phone), never taken from free text.
 VALID_SLOT_KEYS = {
     'amount',
-    'recipient',
+    'phone_number',
     'account_number',
     'bill_type',
     'bill_reference',
@@ -70,6 +78,10 @@ VALID_SLOT_KEYS = {
 }
 
 VALID_BILL_TYPES = {'electricity', 'gas', 'water', 'internet', 'ptcl'}
+
+# Pakistani mobile number, local or international, optionally with
+# spaces/dashes - mirrors nlp_module.extract_phone_number_pk()'s format.
+PK_PHONE_RE = re.compile(r'(?:0092|92|0)?3\d{9}$')
 
 # Amount guard rails — anything outside this range is rejected
 AMOUNT_MIN = 1
@@ -92,7 +104,7 @@ JSON SCHEMA YOU MUST RETURN (always all keys present):
   "intent": "<one of the valid intents below>",
   "entities": {
     "amount": <integer rupees or null>,
-    "recipient": "<string name or null>",
+    "phone_number": "<string Pakistani mobile number or null>",
     "account_number": "<string or null>",
     "bill_type": "<electricity|gas|water|internet|ptcl or null>",
     "bill_reference": "<string or null>",
@@ -125,7 +137,14 @@ RULES:
 3. For amount: extract the number in Pakistani Rupees as an integer. Understand:
    - "5 hajar" = 5000, "do lakh" = 200000, "paanch sau" = 500
    - Ignore decimal amounts for banking transactions.
-4. For recipient: extract ONLY the person's name, nothing else.
+4. For transfer_money and pay_bill: extract ONLY a phone number into
+   "phone_number" (Pakistani mobile format, e.g. 03001234567 or
+   +923001234567). NEVER extract, guess, or return a person's name for
+   any field, under any circumstance - not into "phone_number", not into
+   any other key, and not into "conversational_reply" either. The
+   recipient's identity is looked up server-side from the phone number;
+   you are not responsible for identifying who the money is going to, and
+   must not attempt to.
 5. For bill_type: map all variants (bijli/bijlee/electricity → electricity, pani/paani → water, etc.)
 6. For conversational_reply: ONLY populate this when intent is "general_chat".
    Write the reply in the SAME language the user used (English / Urdu / Roman Urdu).
@@ -173,7 +192,7 @@ class LLMFallback:
         user_message  : raw text from the user
         current_flow  : e.g. 'transfer_money' — gives the LLM context about
                         which slot it's currently trying to fill
-        flow_state    : e.g. 'TRANSFER_AWAIT_RECIPIENT' — finer context
+        flow_state    : e.g. 'TRANSFER_AWAIT_IDENTIFIER' — finer context
         language      : 'en' | 'ur' | 'ru' — drives reply language instruction
 
         Returns
@@ -315,14 +334,19 @@ class LLMFallback:
             except (TypeError, ValueError):
                 logger.warning("LLM amount '%s' is not an integer, discarded", raw_amount)
 
-        # recipient
-        raw_recipient = raw_entities.get('recipient')
-        if raw_recipient and isinstance(raw_recipient, str):
-            cleaned_recipient = raw_recipient.strip()
-            # Must contain at least one letter and no digits (names aren't numbers)
-            if re.search(r'[a-zA-Z\u0600-\u06FF]', cleaned_recipient) \
-                    and not re.fullmatch(r'\d+', cleaned_recipient):
-                entities['recipient'] = cleaned_recipient.title()
+        # phone_number (transfer_money / pay_bill target) — the ONLY way a
+        # transfer/bill-payment target may be identified. A recipient NAME
+        # is never accepted here even if the LLM mistakenly returns one:
+        # we validate strictly against the Pakistani mobile number shape
+        # and silently discard anything that doesn't match, rather than
+        # letting a name slip through under this key.
+        raw_phone = raw_entities.get('phone_number')
+        if raw_phone and isinstance(raw_phone, str):
+            digits_only = re.sub(r'[^\d]', '', raw_phone.strip())
+            if PK_PHONE_RE.fullmatch(digits_only):
+                # Normalize to local 03XXXXXXXXX form.
+                local_digits = digits_only[-10:]
+                entities['phone_number'] = '0' + local_digits
 
         # account_number
         raw_acc = raw_entities.get('account_number')

@@ -58,7 +58,7 @@ from features import (
 # ── Savings Goals feature (self-contained blueprint) ───────────────────────
 from advisor_profile_routes import advisor_profile_bp, init_profile_tables
 from goals_routes import goals_bp, init_goals_tables
-from nlp_module import BankAIConversation
+from nlp_module import BankAIConversation, set_recipient_resolver
 
 # ── Optional: speech recognition ─────────────────────────────────────────────
 try:
@@ -154,6 +154,52 @@ def release_db(conn):
     """Returns the connection back to the pool instead of closing it."""
     connection_pool.putconn(conn)
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phone -> (account_number, name) resolver for transfer_money / bill_payments
+# ─────────────────────────────────────────────────────────────────────────────
+# Used by nlp_module.py so the chatbot NEVER asks for, or parses, a
+# recipient's name from free text. When a phone number is captured for a
+# transfer/bill-payment target, this looks the number up against the
+# `users` table and returns the registered name + account_number, or None
+# if no account is registered against that number.
+
+def lookup_account_by_phone(phone: str):
+    """
+    Parameterized PostgreSQL lookup: users.phone -> (account_number, name).
+
+    `phone` is expected already-normalized to local '03XXXXXXXXX' form by
+    nlp_module.extract_phone_number_pk(). Returns
+    {'account_number': ..., 'name': ...} on a match, or None otherwise.
+    Never raises to the caller - any DB error is treated as "not found" so
+    the conversation flow can fail gracefully rather than crash.
+    """
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT account_number, name FROM users WHERE phone = %s",
+            (phone,)
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        return {'account_number': row['account_number'], 'name': row['name']}
+    except Exception as e:
+        print(f"[lookup_account_by_phone] error: {e}")
+        return None
+    finally:
+        if conn is not None:
+            release_db(conn)
+
+
+# Wire the resolver into the NLP engine now that both `chatbot` and
+# `lookup_account_by_phone` exist. From this point on, transfer_money's
+# phone-number slot auto-resolves via PostgreSQL instead of ever asking
+# for a recipient name.
+set_recipient_resolver(lookup_account_by_phone)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Schema initialisation
