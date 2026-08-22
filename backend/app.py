@@ -60,7 +60,7 @@ from features import (
 # ── Savings Goals feature (self-contained blueprint) ───────────────────────
 from advisor_profile_routes import advisor_profile_bp, init_profile_tables
 from goals_routes import goals_bp, init_goals_tables
-from nlp_module import BankAIConversation, set_recipient_resolver
+from nlp_module import BankAIConversation, set_recipient_resolver, set_account_resolver
 
 # ── Optional: speech recognition ─────────────────────────────────────────────
 try:
@@ -181,7 +181,7 @@ def lookup_account_by_phone(phone: str):
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            "SELECT account_number, name FROM users WHERE phone = %s",
+            "SELECT account_number, name FROM dashboard_users WHERE phone = %s",
             (phone,)
         )
         row = c.fetchone()
@@ -196,11 +196,45 @@ def lookup_account_by_phone(phone: str):
             release_db(conn)
 
 
-# Wire the resolver into the NLP engine now that both `chatbot` and
-# `lookup_account_by_phone` exist. From this point on, transfer_money's
-# phone-number slot auto-resolves via PostgreSQL instead of ever asking
-# for a recipient name.
+def lookup_account_by_account_number(account_number: str):
+    """
+    Parameterized PostgreSQL lookup: dashboard_users.account_number ->
+    (account_number, name). Used when the user picks "Account Number" as
+    the transfer method.
+
+    Unlike lookup_account_by_phone(), returning None here is an entirely
+    normal outcome (it just means the number belongs to an external bank,
+    not a FinBud-AI account) - never raises, any DB error is also treated
+    as "not found" so the flow degrades gracefully to asking for a name.
+    """
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT account_number, name FROM dashboard_users WHERE account_number = %s",
+            (account_number,)
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        return {'account_number': row['account_number'], 'name': row['name']}
+    except Exception as e:
+        print(f"[lookup_account_by_account_number] error: {e}")
+        return None
+    finally:
+        if conn is not None:
+            release_db(conn)
+
+
+# Wire the resolvers into the NLP engine now that both `chatbot` and the
+# lookup functions exist. From this point on, transfer_money's identifier
+# slot auto-resolves via PostgreSQL instead of ever asking for a recipient
+# name - except when the identifier turns out to be a real external bank
+# IBAN/account number, in which case the flow falls back to asking for the
+# recipient's name directly (see nlp_module.handle_recipient_step).
 set_recipient_resolver(lookup_account_by_phone)
+set_account_resolver(lookup_account_by_account_number)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -898,7 +932,7 @@ def chat_message():
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            "SELECT name, balance, points, password_hash FROM dashboard_users WHERE account_number=%s",
+            "SELECT name, balance, points, password_hash, pin_hash FROM dashboard_users WHERE account_number=%s",
             (account_number,)
         )
         user = c.fetchone()
@@ -912,6 +946,17 @@ def chat_message():
         # etc.) — cast once here so every arithmetic op further down works.
         user['balance'] = float(user['balance'])
         user['points']  = int(user['points'])
+
+        # Phone/PIN accounts have pin_hash set and no password_hash; legacy
+        # email/password accounts have password_hash and no pin_hash. Every
+        # password-confirmation check in this route (transaction password,
+        # emergency lock) must check against whichever one this user
+        # actually has - checking password_hash alone throws AttributeError
+        # for phone/PIN accounts (check_password_hash calls .split() on it,
+        # and it's None), which was surfacing to the user as a generic
+        # "Sorry, something went wrong" on every transfer/bill-pay password
+        # submission for those accounts.
+        auth_hash = user['pin_hash'] or user['password_hash']
 
         # ── Human-mode bypass ───────────────────────────────────────────────
         # If a banker has taken this conversation over (via Live Chat Monitor
@@ -989,7 +1034,7 @@ def chat_message():
             password = entities.get('password', '')
             attempts = nlp_result.get('emergency_attempts', 3)
 
-            if check_password_hash(user['password_hash'], password):
+            if auth_hash and check_password_hash(auth_hash, password):
                 c.execute(
                     "UPDATE cards SET status='locked' WHERE account_number=%s",
                     (account_number,)
@@ -1038,7 +1083,7 @@ def chat_message():
             password        = entities.get('password', '')
             original_intent = nlp_result.get('original_intent')
 
-            if not check_password_hash(user['password_hash'], password):
+            if not auth_hash or not check_password_hash(auth_hash, password):
                 ai_response = chatbot.responses['password_incorrect'][language]
                 session['conversation_context'] = {}
 
@@ -1064,9 +1109,17 @@ def chat_message():
                 amount              = entities.get('amount')
                 recipient           = entities.get('recipient')
                 transfer_method     = entities.get('transfer_method')
-                recipient_account   = entities.get('transfer_identifier')
+                recipient_identifier = entities.get('transfer_identifier')
                 purpose             = entities.get('purpose')
                 description         = entities.get('description')
+                # Only set when transfer_identifier resolved against a real
+                # FinBud-AI account (Raast ID always resolves this way;
+                # Account Number resolves this way when it happens to match
+                # a FinBud-AI account). None for IBAN and for an Account
+                # Number that belongs to an external bank - i.e. exactly the
+                # cases where we have no way to actually move the money, so
+                # we can only deduct it from the sender.
+                recipient_account = entities.get('account_number')
 
                 if user['balance'] < amount:
                     ai_response = chatbot.responses['insufficient_funds'][language].format(balance=user['balance'])
@@ -1075,17 +1128,52 @@ def chat_message():
                     points_earned = int(amount // 1000) * 5
                     new_balance   = user['balance'] - amount
                     new_points    = user['points'] + points_earned
+                    now_iso       = now_pk().isoformat()
+                    txn_desc      = f"Transfer to {recipient} ({transfer_method}, {purpose})"
 
                     c.execute(
                         "UPDATE dashboard_users SET balance=%s, points=%s WHERE account_number=%s",
                         (new_balance, new_points, account_number)
                     )
+                    # Sender-side ledger entry (both FinBud-internal and
+                    # external transfers get one of these).
                     c.execute("""
                         INSERT INTO dashboard_transactions
                             (account_number, transaction_type, description, amount, recipient, status, created_at, category)
-                        VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, %s)
-                    """, (account_number, f"Transfer to {recipient} ({transfer_method}, {purpose})", -amount,
-                          recipient_account, now_pk().isoformat(), description))
+                        VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, 'Transfer')
+                    """, (account_number, txn_desc, -amount,
+                          recipient_account or recipient_identifier, now_iso))
+
+                    if recipient_account:
+                        # FinBud -> FinBud: actually move the money by
+                        # crediting the recipient's real account, same as
+                        # the dashboard's Send Money flow (execute_transfer)
+                        # does - this was previously missing entirely, so
+                        # chatbot transfers silently vanished the amount
+                        # instead of landing in the recipient's balance.
+                        c.execute(
+                            "UPDATE dashboard_users SET balance = balance + %s WHERE account_number=%s",
+                            (amount, recipient_account)
+                        )
+                        c.execute("""
+                            INSERT INTO dashboard_transactions
+                                (account_number, transaction_type, description, amount, recipient, status, created_at, category)
+                            VALUES (%s, 'transfer', %s, %s, %s, 'completed', %s, 'Transfer')
+                        """, (recipient_account, f"Received from {user['name']}", amount,
+                              account_number, now_iso))
+                        c.execute("""
+                            INSERT INTO notifications(account_number, message, notif_type, is_read, created_at)
+                            VALUES (%s, %s, 'transaction', FALSE, %s)
+                        """, (
+                            recipient_account,
+                            f"PKR {amount:,.0f} received from {user['name']}.",
+                            now_iso
+                        ))
+                    # else: IBAN, or an Account Number that isn't a FinBud-AI
+                    # account - there's no real bank API wired up, so all we
+                    # can honestly do is deduct it from the sender (already
+                    # done above) rather than pretend to move it anywhere.
+
                     conn.commit()
 
                     ai_response = chatbot.responses['transfer_success'][language].format(
@@ -1210,7 +1298,7 @@ def chat_message():
                         'redemption_choice', 'account_number', 'flow_state',
                         'transfer_method', 'transfer_identifier', 'purpose',
                         'description', 'bill_category', 'service_provider',
-                        'provider_hint']:
+                        'provider_hint', '_awaiting_manual_recipient_name']:
                 if key in nlp_result:
                     context[key] = nlp_result[key]
             context['session_language'] = nlp_result.get('session_language')
@@ -3104,5 +3192,3 @@ def spending_by_category_detailed():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-
-
