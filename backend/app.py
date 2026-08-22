@@ -181,7 +181,7 @@ def lookup_account_by_phone(phone: str):
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            "SELECT account_number, name FROM users WHERE phone = %s",
+            "SELECT account_number, name FROM dashboard_users WHERE phone = %s",
             (phone,)
         )
         row = c.fetchone()
@@ -3104,5 +3104,4 @@ def spending_by_category_detailed():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-
 
