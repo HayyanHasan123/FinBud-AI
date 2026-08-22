@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import GrowMyMoneySection from '../components/advisor/GrowMyMoneySection.jsx'
+import AnalyticsView from '../components/dashboard/Analytics.jsx'
+import WalletView from '../components/dashboard/Wallet.jsx'
 
 const DAILY_TRANSFER_LIMIT = 200000
 
@@ -75,25 +77,7 @@ function detectSubscriptions(transactions) {
   return subs.sort((a, b) => b.amount - a.amount)
 }
 
-// Short currency label for tight spaces (e.g. "45K" instead of "45,000") —
-// used on the Monthly Trend bars so the numbers fit above thin bar columns.
-function formatCompactPKR(n) {
-  const v = Math.abs(n || 0)
-  if (v >= 1000) return `${Math.round(v / 1000)}K`
-  return `${Math.round(v)}`
-}
 
-// Icon + severity styling per anomaly type returned by detect_anomalies().
-// The backend already writes a human-readable `message` for each one, so
-// the frontend just needs to decide how urgent it looks.
-const ANOMALY_CONFIG = {
-  new_biller:     { icon: '🆕', severity: 'info',    label: 'New Biller' },
-  amount_spike:   { icon: '📈', severity: 'warning', label: 'Amount Spike' },
-  duplicate_bill: { icon: '📋', severity: 'warning', label: 'Duplicate Bill' },
-  large_transfer: { icon: '💸', severity: 'danger',  label: 'Large Transfer' },
-  rapid_fire:     { icon: '⚡', severity: 'danger',  label: 'Rapid Transactions' },
-  odd_hours:      { icon: '🌙', severity: 'danger',  label: 'Unusual Hours' },
-}
 
 // Fallback list — matches app.py's EXPENSE_CATEGORIES exactly (per mentor
 // MoM Session 3). Used only until /api/transaction/categories responds;
@@ -163,9 +147,9 @@ const TRANSLATIONS = {
   bell_activity: { en: 'Transaction Activity', ur: 'لین دین کی سرگرمی', roman: 'Transaction Activity' },
   bell_no_activity: { en: 'No activity yet', ur: 'ابھی تک کوئی سرگرمی نہیں', roman: 'Abhi Tak Koi Activity Nahi' },
 
-  // Analytics (FinancialAdvisorView)
+  // Analytics (AnalyticsView, ../components/dashboard/Analytics.jsx)
   analytics_title: { en: 'Your Analytics', ur: 'آپ کے تجزیات', roman: 'Aap Ke Analytics' },
-  analytics_subtitle: { en: 'Your income, spending, and money habits — all in one place.', ur: 'آپ کی آمدنی، اخراجات اور پیسوں کی عادات — سب ایک جگہ۔', roman: 'Aap Ki Income, Kharch, Aur Paison Ki Aadatein — Sab Aik Jagah.' },
+  analytics_subtitle: { en: 'Your income, spending, and money habits, all in one place.', ur: 'آپ کی آمدنی، اخراجات اور پیسوں کی عادات، سب ایک جگہ۔', roman: 'Aap Ki Income, Kharch, Aur Paison Ki Aadatein, Sab Aik Jagah.' },
   analytics_log_income: { en: '+ Log Income', ur: '+ آمدنی درج کریں', roman: '+ Income Likhein' },
   analytics_this_month: { en: 'This Month', ur: 'اس مہینے', roman: 'Is Mahine' },
   read_aloud: { en: '🔊 Read Aloud', ur: '🔊 پڑھ کر سنائیں', roman: '🔊 Parh Kar Sunayein' },
@@ -193,7 +177,7 @@ const TRANSLATIONS = {
 
   // Wallet
   wallet_title: { en: 'Wallet', ur: 'بٹوہ', roman: 'Wallet' },
-  wallet_subtitle: { en: 'All your bank accounts and cards, linked in one place — like Google Pay or Apple Pay, but built for FinBud.', ur: 'آپ کے تمام بینک اکاؤنٹس اور کارڈز ایک جگہ منسلک — گوگل پے یا ایپل پے کی طرح، لیکن فن بڈ کے لیے بنایا گیا۔', roman: 'Aap Ke Tamam Bank Accounts Aur Cards Aik Jagah Link — Google Pay Ya Apple Pay Ki Tarah, Lekin FinBud Ke Liye Bana.' },
+  wallet_subtitle: { en: 'All your bank accounts and cards, linked in one place.', ur: 'آپ کے تمام بینک اکاؤنٹس اور کارڈز ایک جگہ منسلک۔', roman: 'Aap Ke Tamam Bank Accounts Aur Cards Aik Jagah Link.' },
   wallet_net_worth: { en: 'Net Worth', ur: 'خالص مالیت', roman: 'Net Worth' },
   wallet_finbud_balance: { en: 'FinBud Balance', ur: 'فن بڈ بیلنس', roman: 'FinBud Balance' },
   wallet_linked_accounts: { en: 'Linked Accounts', ur: 'منسلک اکاؤنٹس', roman: 'Linked Accounts' },
@@ -496,11 +480,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (activeView === 'advisor' && !advisor.loaded) loadAdvisorData()
-  }, [activeView])
+  }, [activeView, advisor.loaded])
 
   useEffect(() => {
     if (activeView === 'wallet' && !wallet.loaded) loadWalletData()
-  }, [activeView])
+  }, [activeView, wallet.loaded])
 
   async function loadAll() {
     try {
@@ -575,7 +559,7 @@ export default function Dashboard() {
       fetch('/api/financial/monthly-trend', { credentials: 'include' }),
       fetch('/api/financial/utility-usage', { credentials: 'include' }),
       fetch('/api/credit-score', { credentials: 'include' }),
-      fetch(`/insights/anomalies?account=${encodeURIComponent(userData.userId)}`, { credentials: 'include' })
+      fetch(' /insights/anomalies' , { credentials: 'include' })
     ])
 
     let summary = null, summaryAvailable = false
@@ -713,6 +697,26 @@ export default function Dashboard() {
       renderPrint(data.receipt)
       setTimeout(() => window.print(), 300)
     } catch { setModal({ type: 'alert', title: 'Error', message: 'Could not fetch receipt.', color: 'var(--danger)' }) }
+  }
+
+  function downloadTransactionsList() {
+    if (!transactions || transactions.length === 0) return
+    const header = ['Date', 'Type', 'Amount']
+    const rows = transactions.map(tx => [
+      tx.date,
+      getTransactionDisplayLabel(tx),
+      `${tx.amount < 0 ? '-' : ''}PKR ${Math.abs(tx.amount).toLocaleString('en-PK')}`
+    ])
+    const csv = [header, ...rows].map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `finbud-transactions-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
   }
 
   function renderPrint(receipt) {
@@ -1707,25 +1711,6 @@ export default function Dashboard() {
   // ── HELPERS ──────────────────────────────────────────────
   // One-tap plain-language explainer for jargon terms (Module F). Tap the
   // "?" to see a short sentence, tap again (or elsewhere) to close it.
-  function InfoTip({ text }) {
-    const [open, setOpen] = useState(false)
-    return (
-      <span className="info-tip-wrap">
-        <button
-          type="button"
-          className="info-tip-btn"
-          aria-label="What does this mean?"
-          onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
-        >?</button>
-        {open && (
-          <span className="info-tip-bubble" onClick={e => e.stopPropagation()}>
-            {text}
-          </span>
-        )}
-      </span>
-    )
-  }
-
   // Reusable "pick one" control for the Send Money / Pay Bill step flows.
   // options: [{ key, icon (fa class or emoji), label, sub? }]
   // variant: 'grid' (icon boxes) | 'list' (full-width rows)
@@ -1915,414 +1900,6 @@ export default function Dashboard() {
     }
   }
 
-  function FinancialAdvisorView() {
-    const income = advisor.summary?.income ?? 0
-    const expenses = advisor.summary?.expenses ?? 0
-    const net = advisor.summary?.net ?? (income - expenses)
-    const upcomingBillsTotal = reminders.reduce((s, r) => s + (r.amount || 0), 0)
-    // Safe to Spend now prefers the backend's own calculation (new dedicated
-    // logic on the backend) when it's present; falls back to the old local
-    // Net-minus-upcoming-bills estimate only until that field ships.
-    const backendSafeToSpend = advisor.summary?.safe_to_spend
-    const usingBackendSafeToSpend = typeof backendSafeToSpend === 'number'
-    const safeToSpend = advisor.summaryAvailable
-      ? (usingBackendSafeToSpend ? backendSafeToSpend : net - upcomingBillsTotal)
-      : null
-    const incomeEntries = Object.entries(advisor.incomeBreakdown).sort((a, b) => b[1] - a[1])
-    const incomeTotal = incomeEntries.reduce((s, [, v]) => s + v, 0)
-    const maxTrend = Math.max(1, ...advisor.monthlyTrend.flatMap(m => [m.income || 0, m.expenses || 0]))
-    const today = new Date()
-    const dayOfMonth = today.getDate()
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
-    const pctDaysElapsed = (dayOfMonth / daysInMonth) * 100
-    // Spending Pace compares THIS month's spend-to-date against LAST
-    // month's actual total (not an average that can include this same
-    // in-progress month, which was quietly always showing 100%).
-    const priorMonths = advisor.monthlyTrend.length > 1 ? advisor.monthlyTrend.slice(0, -1) : []
-    const lastMonth = priorMonths.length > 0 ? priorMonths[priorMonths.length - 1] : null
-    const lastMonthTotal = lastMonth ? (lastMonth.expenses || 0) : null
-    const lastMonthLabel = lastMonth ? lastMonth.month : null
-    const pctOfLastMonthSpent = (lastMonthTotal && lastMonthTotal > 0)
-      ? Math.round((expenses / lastMonthTotal) * 100)
-      : null
-    const projectedThisMonth = (expenses / dayOfMonth) * daysInMonth
-    const pctVsLastMonth = (lastMonthTotal && lastMonthTotal > 0)
-      ? Math.round(((projectedThisMonth - lastMonthTotal) / lastMonthTotal) * 100)
-      : null
-    const paceAhead = pctVsLastMonth !== null && pctVsLastMonth > 10
-    const paceSlower = pctVsLastMonth !== null && pctVsLastMonth < -10
-    const subscriptionsTotal = advisor.subscriptions.reduce((s, sub) => s + sub.amount, 0)
-    // Simple Mode (Module F): fewer things on screen at once — the three
-    // more detailed/preview cards below collapse into one "More Insights"
-    // toggle instead of all being shown simultaneously.
-    const [showMore, setShowMore] = useState(false)
-
-    return (
-      <div className="advisor-wrap">
-        <div className="advisor-header">
-          <div>
-            <h2 className="advisor-title">{t('analytics_title')}</h2>
-            <p className="advisor-subtitle">{t('analytics_subtitle')}</p>
-          </div>
-          <button className="topup-btn" onClick={() => setModal({ type: 'logIncome' })}>{t('analytics_log_income')}</button>
-        </div>
-
-        <div className="advisor-grid">
-          <div className="card advisor-summary-card">
-            <div className="card-header-row">
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>{t('analytics_this_month')}</h3>
-              {advisor.summaryAvailable && (
-                <button type="button" className="read-aloud-btn" aria-label="Read this month's summary aloud"
-                  onClick={() => speak(`This month, your income is PKR ${income.toLocaleString('en-PK')}, your expenses are PKR ${expenses.toLocaleString('en-PK')}, and it is safe to spend PKR ${safeToSpend.toLocaleString('en-PK')} today.`)}>
-                  {t('read_aloud')}
-                </button>
-              )}
-            </div>
-            {advisor.summaryAvailable ? (
-              <div className="advisor-summary-row">
-                <div className="advisor-stat">
-                  <span className="advisor-stat-label">{t('analytics_income')}</span>
-                  <strong className="advisor-stat-value income-text">PKR {income.toLocaleString('en-PK')}</strong>
-                </div>
-                <div className="advisor-stat">
-                  <span className="advisor-stat-label">{t('analytics_expenses')}</span>
-                  <strong className="advisor-stat-value expense-text">PKR {expenses.toLocaleString('en-PK')}</strong>
-                </div>
-                <div className="advisor-stat">
-                  <span className="advisor-stat-label">{t('analytics_net')}</span>
-                  <strong className={`advisor-stat-value ${net >= 0 ? 'income-text' : 'expense-text'}`}>PKR {net.toLocaleString('en-PK')}</strong>
-                </div>
-                <div className="advisor-stat">
-                  <span className="advisor-stat-label">{t('analytics_safe_to_spend')} <InfoTip text={usingBackendSafeToSpend
-                    ? "What's left after income, minus expenses so far, minus a 20% savings target and a 10% investment amount — so spending today doesn't eat into money you're meant to be setting aside."
-                    : "This is what's left after your income, minus your expenses so far and any bills still due — a rough amount you can spend today without dipping into money you already owe."} /></span>
-                  <strong className={`advisor-stat-value ${safeToSpend >= 0 ? 'income-text' : 'expense-text'}`}>PKR {safeToSpend.toLocaleString('en-PK')}</strong>
-                </div>
-                {usingBackendSafeToSpend && (
-                  <>
-                    <div className="advisor-stat">
-                      <span className="advisor-stat-label">{t('analytics_suggested_savings')}</span>
-                      <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {(advisor.summary.savings_target || 0).toLocaleString('en-PK')}</strong>
-                    </div>
-                    <div className="advisor-stat">
-                      <span className="advisor-stat-label">{t('analytics_suggested_investment')}</span>
-                      <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {(advisor.summary.investment_amount || 0).toLocaleString('en-PK')}</strong>
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : (
-              <p className="advisor-empty">{t('analytics_summary_empty')}</p>
-            )}
-            {advisor.summaryAvailable && (
-              <p className="advisor-footnote">
-                {usingBackendSafeToSpend
-                  ? "Safe to Spend follows the 50/30/20 rule: income minus expenses, minus a 20% savings target and a 10% investment amount — so a night out doesn't quietly eat into money you're meant to be setting aside."
-                  : `Safe to Spend = Net − upcoming bills (PKR ${upcomingBillsTotal.toLocaleString('en-PK')}) — so a night out doesn't quietly eat into money already owed for bills.`}
-              </p>
-            )}
-          </div>
-
-          <div className="card">
-            <div className="card-header-row">
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>{t('analytics_credit_score')}</h3>
-              {advisor.creditScoreAvailable && (
-                <button type="button" className="read-aloud-btn" aria-label="Read credit score aloud"
-                  onClick={() => speak(`Your credit score is ${advisor.creditScore.score}, rated ${advisor.creditScore.label}. ${advisor.creditScore.advice || ''}`)}>
-                  {t('read_aloud')}
-                </button>
-              )}
-            </div>
-            {advisor.creditScoreAvailable && advisor.creditScore ? (
-              <>
-                <div className="credit-score-row">
-                  <div className="credit-score-value" style={{ color: advisor.creditScore.color }}>{advisor.creditScore.score}</div>
-                  <div>
-                    <span className="credit-score-pill" style={{ background: advisor.creditScore.color }}>{advisor.creditScore.label}</span>
-                    <p className="advisor-footnote" style={{ margin: '8px 0 0' }}>{advisor.creditScore.advice}</p>
-                  </div>
-                </div>
-                {advisor.creditScore.breakdown && (
-                  <div className="credit-breakdown-grid">
-                    <div className="credit-breakdown-item">
-                      <span className="advisor-stat-label">{t('analytics_late_payments')}</span>
-                      <strong>{advisor.creditScore.breakdown.late_payments}</strong>
-                    </div>
-                    <div className="credit-breakdown-item">
-                      <span className="advisor-stat-label">Balance</span>
-                      <strong>PKR {(advisor.creditScore.breakdown.balance || 0).toLocaleString('en-PK')}</strong>
-                    </div>
-                    <div className="credit-breakdown-item">
-                      <span className="advisor-stat-label">Transactions (6mo)</span>
-                      <strong>{advisor.creditScore.breakdown.transactions_6m}</strong>
-                    </div>
-                    <div className="credit-breakdown-item">
-                      <span className="advisor-stat-label">Reward Points</span>
-                      <strong>{advisor.creditScore.breakdown.reward_points}</strong>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="advisor-empty">Your credit score builds up as you use FinBud — pay bills on time and keep a healthy balance to see it here.</p>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>Anomaly Alerts</h3>
-            {advisor.anomaliesAvailable && advisor.anomalies.length > 0 ? (
-              advisor.anomalies.map((a, i) => {
-                const cfg = ANOMALY_CONFIG[a.type] || { icon: '⚠️', severity: 'warning', label: a.type }
-                return (
-                  <div key={i} className={`anomaly-item anomaly-${cfg.severity}`}>
-                    <span className="anomaly-icon">{cfg.icon}</span>
-                    <div>
-                      <strong>{cfg.label}</strong>
-                      <p style={{ margin: '3px 0 0', fontSize: 13 }}>{a.message}</p>
-                    </div>
-                  </div>
-                )
-              })
-            ) : (
-              <p className="advisor-empty">No unusual activity detected. We keep an eye on new billers, spending spikes, large transfers, and odd-hours activity automatically.</p>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>{t('analytics_monthly_trend')}</h3>
-            {advisor.trendAvailable && advisor.monthlyTrend.length > 0 ? (
-              <div className="trend-chart">
-                {advisor.monthlyTrend.map(m => (
-                  <div key={m.month} className="trend-col">
-                    <div className="trend-bars">
-                      <div className="trend-bar-wrap">
-                        <span className="trend-bar-value income-text">{formatCompactPKR(m.income)}</span>
-                        <div className="trend-bar income-bar" style={{ height: `${((m.income || 0) / maxTrend) * 100}%` }} title={`Income: PKR ${m.income}`} />
-                      </div>
-                      <div className="trend-bar-wrap">
-                        <span className="trend-bar-value expense-text">{formatCompactPKR(m.expenses)}</span>
-                        <div className="trend-bar expense-bar" style={{ height: `${((m.expenses || 0) / maxTrend) * 100}%` }} title={`Expenses: PKR ${m.expenses}`} />
-                      </div>
-                    </div>
-                    <span className="trend-label">{m.month}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="advisor-empty">{t('analytics_trend_empty')}</p>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>{t('analytics_spending_pace')}</h3>
-            {pctOfLastMonthSpent !== null ? (
-              <>
-                <div className="pace-compare-row">
-                  <div className="pace-compare-stat">
-                    <span className="pace-compare-label">{lastMonthLabel} (full month)</span>
-                    <strong className="pace-compare-value">PKR {lastMonthTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong>
-                  </div>
-                  <div className="pace-compare-stat">
-                    <span className="pace-compare-label">This month so far (Day {dayOfMonth} of {daysInMonth})</span>
-                    <strong className="pace-compare-value">PKR {expenses.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong>
-                  </div>
-                </div>
-
-                <div className="pace-row">
-                  <div className="pace-label-row"><span>You've spent this % of last month's total already</span><strong>{pctOfLastMonthSpent}%</strong></div>
-                  <div className="breakdown-bar-track"><div className={`breakdown-bar-fill ${paceAhead ? 'pace-bar-warning' : 'income-bar-fill'}`} style={{ width: `${Math.min(100, pctOfLastMonthSpent)}%` }} /></div>
-                </div>
-                <div className="pace-row">
-                  <div className="pace-label-row"><span>Days elapsed this month</span><strong>{pctDaysElapsed.toFixed(0)}%</strong></div>
-                  <div className="breakdown-bar-track"><div className="breakdown-bar-fill" style={{ width: `${pctDaysElapsed.toFixed(0)}%` }} /></div>
-                </div>
-
-                <p className={`advisor-footnote ${paceAhead ? 'pace-warning-text' : paceSlower ? 'pace-good-text' : ''}`}>
-                  {paceAhead && (
-                    <>⚠️ At this rate, you're on track to spend about <strong>PKR {projectedThisMonth.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong> this month — {pctVsLastMonth}% more than {lastMonthLabel}'s PKR {lastMonthTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}.</>
-                  )}
-                  {paceSlower && (
-                    <>✅ At this rate, you're on track to spend about <strong>PKR {projectedThisMonth.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong> this month — {Math.abs(pctVsLastMonth)}% less than {lastMonthLabel}'s PKR {lastMonthTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}.</>
-                  )}
-                  {!paceAhead && !paceSlower && (
-                    <>You're tracking about the same as {lastMonthLabel} — on pace for roughly PKR {projectedThisMonth.toLocaleString('en-PK', { maximumFractionDigits: 0 })} this month.</>
-                  )}
-                </p>
-              </>
-            ) : (
-              <p className="advisor-empty">{t('analytics_pace_empty')}</p>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>{t('analytics_income_sources')}</h3>
-            {advisor.incomeAvailable && incomeEntries.length > 0 ? (
-              incomeEntries.map(([src, amt]) => {
-                const pct = incomeTotal > 0 ? (amt / incomeTotal) * 100 : 0
-                return (
-                  <div key={src} className="breakdown-row">
-                    <div className="breakdown-label-row"><span>{src}</span><strong>{pct.toFixed(1)}% · PKR {amt.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong></div>
-                    <div className="breakdown-bar-track"><div className="breakdown-bar-fill income-bar-fill" style={{ width: `${pct.toFixed(1)}%` }} /></div>
-                  </div>
-                )
-              })
-            ) : (
-              <p className="advisor-empty">{t('analytics_income_empty')}</p>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>{t('analytics_spending_breakdown')}</h3>
-            {breakdownEntries.length === 0 ? (
-              <p className="advisor-empty">{t('analytics_breakdown_empty')}</p>
-            ) : breakdownEntries.map(([cat, amt]) => {
-              const pct = breakdownTotal > 0 ? ((amt / breakdownTotal) * 100) : 0
-              return (
-                <div key={cat} className="breakdown-row">
-                  <div className="breakdown-label-row">
-                    <span>{cat}</span>
-                    <strong>{pct.toFixed(1)}% · PKR {amt.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</strong>
-                  </div>
-                  <div className="breakdown-bar-track">
-                    <div className="breakdown-bar-fill" style={{ width: `${pct.toFixed(1)}%` }} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {simpleMode && !showMore ? (
-            <div className="card advisor-insights-card">
-              <button type="button" className="more-insights-btn" onClick={() => setShowMore(true)}>
-                {t('analytics_show_more')} <i className="fas fa-chevron-down" style={{ marginLeft: 6 }} />
-              </button>
-            </div>
-          ) : (
-          <>
-          <div className="card">
-            <h3 style={{ marginTop: 0 }}>{t('analytics_subscriptions')} <span className="preview-tag">{t('analytics_preview')}</span></h3>
-            {advisor.subscriptions.length > 0 ? (
-              <>
-                {advisor.subscriptions.map(sub => (
-                  <div key={sub.description} className="wallet-row">
-                    <div>
-                      <strong>{sub.description}</strong>
-                      <div style={{ fontSize: 12, color: isMobile ? 'var(--text-dark)' : '#777' }}>Seen {sub.occurrences} times · consistent amount</div>
-                    </div>
-                    <span>PKR {sub.amount.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</span>
-                  </div>
-                ))}
-                <p className="advisor-footnote">Detected recurring spend: PKR {subscriptionsTotal.toLocaleString('en-PK', { maximumFractionDigits: 0 })}/month across your last 100 transactions.</p>
-              </>
-            ) : (
-              <p className="advisor-empty">{t('analytics_subscriptions_empty')}</p>
-            )}
-          </div>
-
-          </>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  function GrowMyMoneyView() {
-    return (
-      <div className="advisor-wrap">
-        <GrowMyMoneySection />
-      </div>
-    )
-  }
-
-  function WalletView() {
-    const linkedBalance = wallet.linkedBanks.reduce((s, a) => s + (a.balance || 0), 0)
-    const netWorth = (userData.balance || 0) + linkedBalance + (wallet.otherAssets || 0)
-
-    return (
-      <div className="advisor-wrap">
-        <div className="advisor-header">
-          <div>
-            <h2 className="advisor-title">{t('wallet_title')}</h2>
-            <p className="advisor-subtitle">{t('wallet_subtitle')}</p>
-          </div>
-        </div>
-
-        <div className="advisor-grid">
-          <div className="card advisor-summary-card">
-            <div className="card-header-row">
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>{t('wallet_net_worth')}</h3>
-              <button type="button" className="read-aloud-btn" aria-label="Read net worth aloud"
-                onClick={() => speak(`Your total net worth is PKR ${netWorth.toLocaleString('en-PK')}. Your FinBud balance is PKR ${(userData.balance || 0).toLocaleString('en-PK')}.`)}>
-                {t('read_aloud')}
-              </button>
-            </div>
-            <div className="advisor-summary-row">
-              <div className="advisor-stat">
-                <span className="advisor-stat-label">{t('wallet_finbud_balance')}</span>
-                <strong className="advisor-stat-value income-text">PKR {(userData.balance || 0).toLocaleString('en-PK')}</strong>
-              </div>
-              <div className="advisor-stat">
-                <span className="advisor-stat-label">{t('wallet_linked_accounts')}</span>
-                <strong className="advisor-stat-value">{wallet.linkedBanks.length > 0 ? `PKR ${linkedBalance.toLocaleString('en-PK')}` : '—'}</strong>
-              </div>
-              <div className="advisor-stat">
-                <span className="advisor-stat-label">{t('wallet_other_assets')}</span>
-                <strong className="advisor-stat-value">PKR {(wallet.otherAssets || 0).toLocaleString('en-PK')}</strong>
-                <button type="button" className="edit-assets-link" onClick={() => setModal({ type: 'editAssets' })}>{t('wallet_edit')}</button>
-              </div>
-              <div className="advisor-stat">
-                <span className="advisor-stat-label">{t('wallet_total_net_worth')} <InfoTip text="This adds up your FinBud balance, any linked bank accounts, and other assets you've told us about — a rough picture of everything you own through FinBud." /></span>
-                <strong className="advisor-stat-value" style={{ color: 'var(--primary-purple)' }}>PKR {netWorth.toLocaleString('en-PK')}</strong>
-              </div>
-            </div>
-            {wallet.linkedBanks.length === 0 && (
-              <p className="advisor-footnote">{t('wallet_link_note')}</p>
-            )}
-          </div>
-
-          <div className="card">
-            <div className="wallet-card-header">
-              <h3 style={{ margin: 0 }}>{t('wallet_linked_bank_accounts')}</h3>
-              <button className="topup-btn" onClick={() => setModal({ type: 'linkBank' })}>{t('wallet_link_account')}</button>
-            </div>
-            {wallet.linkedBanksAvailable && wallet.linkedBanks.length > 0 ? (
-              wallet.linkedBanks.map((acc, i) => (
-                <div key={i} className="wallet-row">
-                  <div>
-                    <strong>{acc.bank}</strong>
-                    <div style={{ fontSize: 12, color: isMobile ? 'var(--text-dark)' : '#777' }}>{acc.masked_iban || acc.iban}</div>
-                  </div>
-                  <span className="wallet-status-pill">{acc.status || 'Linked'}</span>
-                </div>
-              ))
-            ) : (
-              <p className="advisor-empty">{t('wallet_no_banks')}</p>
-            )}
-          </div>
-
-          <div className="card">
-            <div className="wallet-card-header">
-              <h3 style={{ margin: 0 }}>{t('wallet_my_cards')}</h3>
-              <button className="topup-btn" onClick={() => setModal({ type: 'addCard' })}>{t('wallet_add_card')}</button>
-            </div>
-            {wallet.cards.length > 0 ? (
-              wallet.cards.map(c => (
-                <div key={c.card_id} className="wallet-row">
-                  <div>
-                    <strong>{c.card_number_masked}</strong>
-                  </div>
-                  <span className={`wallet-status-pill ${c.status === 'locked' ? 'locked' : ''}`}>{c.status}</span>
-                </div>
-              ))
-            ) : (
-              <p className="advisor-empty">{t('wallet_no_cards')}</p>
-            )}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   function FinancialReports() {
     const entries = Object.entries(breakdown).sort((a, b) => b[1] - a[1])
     const total = entries.reduce((s, [, v]) => s + v, 0)
@@ -2369,7 +1946,7 @@ export default function Dashboard() {
              in Send Money / Pay Bill / every modal form. */
           color-scheme: light;
         }
-        html, body { margin:0; padding:0; width:100%; min-height:100vh; }
+        html, body { margin:0; padding:0; width:100%; min-height:100vh; overflow-x:hidden; }
         #root { width:100%; min-height:100vh; display:block; }
         * { box-sizing: border-box; font-family: Inter, ui-sans-serif, system-ui; }
         body { background: var(--bg); color: var(--text-dark); }
@@ -2440,22 +2017,17 @@ export default function Dashboard() {
         .chat-text { font-weight:600; font-size:20px; line-height:1.3; }
         .transactions-card { background:var(--card); padding:20px 22px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,0.05); max-width:420px; }
         .transactions-card h3 { color:var(--primary-purple); font-weight:700; margin:0; font-size:16px; }
+        .tx-card-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+        .tx-download-btn { background:none; border:none; color:var(--primary-purple); font-size:16px; cursor:pointer; padding:6px 8px; border-radius:6px; flex-shrink:0; }
+        .tx-download-btn:hover { background:var(--secondary-purple); }
         .tx-table { width:100%; table-layout:fixed; border-collapse:collapse; margin-top:15px; color:var(--text-dark); }
         .tx-table th, .tx-table td { padding:12px 0; border-bottom:1px solid rgba(92,45,145,0.1); font-size:13px; text-align:left; overflow:hidden; }
         .tx-table th:nth-child(1), .tx-table td:nth-child(1) { white-space:nowrap; padding-right:8px; }
         .tx-table th { color:var(--primary-purple); font-weight:600; text-transform:uppercase; font-size:11px; }
         .tx-desc-cell { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:8px; }
         .tx-table th:nth-child(3), .tx-table td:nth-child(3) { text-align:right; font-weight:600; white-space:nowrap; }
-        .tx-table th:nth-child(4), .tx-table td:nth-child(4) { text-align:right; }
         .income-text { color:var(--income); }
         .expense-text { color:var(--expense); }
-        .tx-menu-wrap { position:relative; display:inline-block; }
-        .tx-menu-btn { background:none; border:none; color:var(--primary-purple); font-size:18px; font-weight:900; cursor:pointer; padding:2px 8px; border-radius:6px; }
-        .tx-menu-btn:hover { background:var(--secondary-purple); }
-        .tx-menu-dropdown { display:none; position:absolute; right:0; top:28px; background:var(--card); box-shadow:0 4px 15px rgba(0,0,0,0.15); border-radius:8px; min-width:170px; z-index:50; overflow:hidden; }
-        .tx-menu-dropdown.open { display:block; }
-        .tx-menu-dropdown a { display:block; padding:10px 14px; font-size:13px; color:var(--text-dark); text-decoration:none; cursor:pointer; }
-        .tx-menu-dropdown a:hover { background:var(--secondary-purple); color:var(--primary-purple); }
         .breakdown-card { background:var(--card); padding:20px 30px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,0.05); }
         .breakdown-row { margin-bottom:14px; }
         .breakdown-label-row { display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; }
@@ -2493,9 +2065,10 @@ export default function Dashboard() {
         .credit-score-row { display:flex; align-items:center; gap:20px; flex-wrap:wrap; margin-bottom:16px; }
         .credit-score-value { font-size:48px; font-weight:800; line-height:1; }
         .credit-score-pill { display:inline-block; padding:4px 14px; border-radius:20px; color:#fff; font-size:12px; font-weight:700; text-transform:uppercase; }
-        .credit-breakdown-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; padding-top:14px; border-top:1px solid var(--secondary-purple); }
-        .credit-breakdown-item { display:flex; flex-direction:column; gap:4px; }
-        .credit-breakdown-item strong { font-size:15px; color:var(--primary-purple); }
+        .credit-breakdown-list { padding-top:14px; border-top:1px solid var(--secondary-purple); }
+        .credit-breakdown-row { display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--secondary-purple); }
+        .credit-breakdown-row:last-child { border-bottom:none; }
+        .credit-breakdown-row strong { font-size:15px; color:var(--primary-purple); }
 
         /* Anomaly Alerts card */
         .anomaly-item { display:flex; gap:12px; align-items:flex-start; padding:12px; margin-bottom:10px; border-radius:8px; border-left:4px solid var(--secondary-purple); background:var(--secondary-purple); }
@@ -2788,6 +2361,7 @@ export default function Dashboard() {
         .mobile-shell .advisor-chat-bubble-btn { bottom:92px; right:16px; }
         .mobile-shell .advisor-greeting-bubble { bottom:172px; right:16px; max-width:calc(100vw - 48px); }
         .mobile-shell .advisor-chat-sidepanel { bottom:76px; }
+        /* ══════════════════════════════════════════════════════════
            MOBILE SHELL — a genuinely different structure for phones,
            not the desktop layout squeezed narrower. Same colors, fonts,
            icons, and .card/.action-btn/.chat-card etc. building blocks
@@ -2825,7 +2399,7 @@ export default function Dashboard() {
           line-height: 2;
         }
 
-        .mobile-main { flex:1; width:100%; padding:16px; max-width:600px; margin:0 auto; box-sizing:border-box; }
+        .mobile-main { flex:1; width:100%; padding:16px 16px calc(84px + env(safe-area-inset-bottom, 0)) 16px; max-width:600px; margin:0 auto; box-sizing:border-box; }
 
         /* Home */
         .mobile-home-stack { display:flex; flex-direction:column; gap:16px; }
@@ -2855,7 +2429,6 @@ export default function Dashboard() {
         .mobile-main .advisor-header { flex-direction:column; align-items:stretch; gap:10px; }
         .mobile-main .advisor-header .topup-btn { align-self:flex-start; }
         .mobile-main .card { padding:18px 16px; border-radius:14px; }
-        .mobile-main .credit-breakdown-grid { grid-template-columns:1fr; }
         .mobile-main .pace-compare-row { flex-direction:column; gap:10px; }
 
         /* Card captions/labels/footnotes use a lighter gray on desktop for a
@@ -2915,7 +2488,7 @@ export default function Dashboard() {
 
       <div ref={printRef} className="receipt-print" />
 
-      {isMobile ? <MobileShell /> : <DesktopShell />}
+      {isMobile ? MobileShell() : DesktopShell()}
 
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)} />
 
@@ -3090,18 +2663,22 @@ export default function Dashboard() {
                   </button>
 
                   <div className="transactions-card">
-                    <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 18, marginLeft: 5 }} /></h3>
+                    <div className="tx-card-header">
+                      <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 18, marginLeft: 5 }} /></h3>
+                      <button className="tx-download-btn" aria-label={t('tx_download_receipt')} title={t('tx_download_receipt')} onClick={downloadTransactionsList}>
+                        <i className="fas fa-download" />
+                      </button>
+                    </div>
                     <table className="tx-table">
                       <colgroup>
-                        <col style={{ width: '26%' }} />
-                        <col style={{ width: '40%' }} />
-                        <col style={{ width: '24%' }} />
-                        <col style={{ width: '10%' }} />
+                        <col style={{ width: '28%' }} />
+                        <col style={{ width: '44%' }} />
+                        <col style={{ width: '28%' }} />
                       </colgroup>
-                      <thead><tr><th>{t('tx_date')}</th><th>{t('tx_type')}</th><th>{t('tx_amount')}</th><th /></tr></thead>
+                      <thead><tr><th>{t('tx_date')}</th><th>{t('tx_type')}</th><th>{t('tx_amount')}</th></tr></thead>
                       <tbody>
                         {transactions.length === 0
-                          ? <tr><td colSpan={4} style={{ textAlign: 'center', color: '#999' }}>{t('tx_empty')}</td></tr>
+                          ? <tr><td colSpan={3} style={{ textAlign: 'center', color: '#999' }}>{t('tx_empty')}</td></tr>
                           : transactions.map((tx, i) => {
                             const menuId = tx.id ?? `idx-${i}`
                             return (
@@ -3109,14 +2686,6 @@ export default function Dashboard() {
                                 <td>{tx.date}</td>
                                 <td className="tx-desc-cell" title={getTransactionDisplayLabel(tx)}>{getTransactionDisplayLabel(tx)}</td>
                                 <td className={tx.amount < 0 ? 'expense-text' : 'income-text'}>PKR {Math.abs(tx.amount).toLocaleString('en-PK')}</td>
-                                <td>
-                                  <div className="tx-menu-wrap">
-                                    <button className="tx-menu-btn" aria-label={`Options for ${tx.description}`} onClick={e => { e.stopPropagation(); setOpenMenuId(openMenuId === menuId ? null : menuId) }}>⋯</button>
-                                    <div className={`tx-menu-dropdown ${openMenuId === menuId ? 'open' : ''}`}>
-                                      <a onClick={() => { setOpenMenuId(null); downloadReceipt(tx.id) }}>{t('tx_download_receipt')}</a>
-                                    </div>
-                                  </div>
-                                </td>
                               </tr>
                             )
                           })}
@@ -3127,15 +2696,17 @@ export default function Dashboard() {
               </main>
             ) : activeView === 'advisor' ? (
               <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
-                <FinancialAdvisorView />
+                <AnalyticsView t={t} advisor={advisor} reminders={reminders} breakdownEntries={breakdownEntries} breakdownTotal={breakdownTotal} isMobile={isMobile} simpleMode={simpleMode} speak={speak} setModal={setModal} />
               </main>
             ) : activeView === 'growmymoney' ? (
               <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
-                <GrowMyMoneyView />
+                <div className="advisor-wrap">
+                  <GrowMyMoneySection />
+                </div>
               </main>
             ) : (
               <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
-                <WalletView />
+                <WalletView t={t} wallet={wallet} userData={userData} isMobile={isMobile} speak={speak} setModal={setModal} />
               </main>
             )}
           </div>
@@ -3147,8 +2718,9 @@ export default function Dashboard() {
   // ── MOBILE SHELL ──────────────────────────────────────────
   // Structurally different from desktop: sticky compact topbar, bottom
   // tab bar instead of a left sidebar, and single-column stacked cards.
-  // Reuses the same sub-view functions (FinancialAdvisorView, WalletView,
-  // GrowMyMoneyView) and the same shared state/handlers as the desktop
+  // Reuses the same sub-view components (AnalyticsView and WalletView,
+  // imported from ../components/dashboard/) and the
+  // same shared state/handlers as the desktop
   // shell — only the arrangement differs, so Send Money, Pay Bill, and
   // every other action behave identically on either shell.
   function MobileShell() {
@@ -3253,18 +2825,22 @@ export default function Dashboard() {
               </button>
 
               <div className="transactions-card mobile-transactions-card">
-                <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 16, marginLeft: 5 }} /></h3>
+                <div className="tx-card-header">
+                  <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 16, marginLeft: 5 }} /></h3>
+                  <button className="tx-download-btn" aria-label={t('tx_download_receipt')} title={t('tx_download_receipt')} onClick={downloadTransactionsList}>
+                    <i className="fas fa-download" />
+                  </button>
+                </div>
                 <table className="tx-table">
                   <colgroup>
-                    <col style={{ width: '26%' }} />
-                    <col style={{ width: '40%' }} />
-                    <col style={{ width: '24%' }} />
-                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '28%' }} />
+                    <col style={{ width: '44%' }} />
+                    <col style={{ width: '28%' }} />
                   </colgroup>
-                  <thead><tr><th>{t('tx_date')}</th><th>{t('tx_type')}</th><th>{t('tx_amount')}</th><th /></tr></thead>
+                  <thead><tr><th>{t('tx_date')}</th><th>{t('tx_type')}</th><th>{t('tx_amount')}</th></tr></thead>
                   <tbody>
                     {transactions.length === 0
-                      ? <tr><td colSpan={4} style={{ textAlign: 'center', color: '#999' }}>{t('tx_empty')}</td></tr>
+                      ? <tr><td colSpan={3} style={{ textAlign: 'center', color: '#999' }}>{t('tx_empty')}</td></tr>
                       : transactions.map((tx, i) => {
                         const menuId = tx.id ?? `idx-${i}`
                         return (
@@ -3272,14 +2848,6 @@ export default function Dashboard() {
                             <td>{tx.date}</td>
                             <td className="tx-desc-cell" title={getTransactionDisplayLabel(tx)}>{getTransactionDisplayLabel(tx)}</td>
                             <td className={tx.amount < 0 ? 'expense-text' : 'income-text'}>PKR {Math.abs(tx.amount).toLocaleString('en-PK')}</td>
-                            <td>
-                              <div className="tx-menu-wrap">
-                                <button className="tx-menu-btn" aria-label={`Options for ${tx.description}`} onClick={e => { e.stopPropagation(); setOpenMenuId(openMenuId === menuId ? null : menuId) }}>⋯</button>
-                                <div className={`tx-menu-dropdown ${openMenuId === menuId ? 'open' : ''}`}>
-                                  <a onClick={() => { setOpenMenuId(null); downloadReceipt(tx.id) }}>{t('tx_download_receipt')}</a>
-                                </div>
-                              </div>
-                            </td>
                           </tr>
                         )
                       })}
@@ -3288,11 +2856,13 @@ export default function Dashboard() {
               </div>
             </div>
           ) : activeView === 'advisor' ? (
-            <FinancialAdvisorView />
+            <AnalyticsView t={t} advisor={advisor} reminders={reminders} breakdownEntries={breakdownEntries} breakdownTotal={breakdownTotal} isMobile={isMobile} simpleMode={simpleMode} speak={speak} setModal={setModal} />
           ) : activeView === 'growmymoney' ? (
-            <GrowMyMoneyView />
+            <div className="advisor-wrap">
+              <GrowMyMoneySection />
+            </div>
           ) : (
-            <WalletView />
+            <WalletView t={t} wallet={wallet} userData={userData} isMobile={isMobile} speak={speak} setModal={setModal} />
           )}
         </main>
 

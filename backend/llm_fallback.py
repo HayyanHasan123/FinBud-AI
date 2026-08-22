@@ -6,9 +6,11 @@ This module is called by nlp_module.py ONLY when the regex engine
 returns intent='unknown' OR when a slot extractor returns None during
 an active flow.
 
-It uses Llama 3 (via Groq API) to:
+
+It uses OpenAI (via Groq API) to:
   1. Classify the intent from the same set of intents the regex uses
-  2. Extract slot values (amount, recipient, account_number, etc.)
+  2. Extract slot values (amount, phone_number, account_number, etc.)
+     — NEVER a recipient/payee name for transfer_money or bill_payments
   3. Generate a conversational reply when neither regex nor a known
      banking intent applies (e.g. "what is a SWIFT code?")
 
@@ -59,36 +61,27 @@ VALID_INTENTS = [
     'general_chat',   # NEW: for conversational replies the regex has no template for
 ]
 
-# Valid slot keys the LLM is allowed to extract
+# Valid slot keys the LLM is allowed to extract.
+# NOTE: 'recipient' is intentionally NOT here. For transfer_money and
+# bill_payments, the LLM must never extract, guess, or be asked for a
+# recipient/payee name - only the target phone number and amount. The
+# recipient's name is always resolved server-side via a PostgreSQL lookup
+# on the phone number (see nlp_module.set_recipient_resolver /
+# app.py:lookup_account_by_phone), never taken from free text.
 VALID_SLOT_KEYS = {
     'amount',
-    'recipient',
+    'phone_number',
     'account_number',
-    'transfer_method',
-    'transfer_identifier',
-    'purpose',
-    'description',
     'bill_type',
-    'bill_category',
-    'service_provider',
     'bill_reference',
     'redemption_choice',
 }
 
 VALID_BILL_TYPES = {'electricity', 'gas', 'water', 'internet', 'ptcl'}
-VALID_BILL_CATEGORIES = {'Electricity', 'Gas', 'Internet'}
-VALID_TRANSFER_METHODS = {'IBAN', 'Account Number', 'Raast ID'}
-VALID_PURPOSES = {'Rent', 'Salary', 'Business', 'Personal', 'Other'}
-VALID_DESCRIPTIONS = {
-    'Utility Bills', 'Grocery', 'Household Staff', 'Society Maintenance',
-    'Car & Fuel', 'Medical', 'Education', 'Entertainment', 'Rent',
-    'Transfer', 'Other',
-}
-VALID_SERVICE_PROVIDERS = {
-    'K-Electric', 'LESCO', 'MEPCO', 'HESCO',
-    'SSGC', 'SNGPL',
-    'PTCL', 'Transworld', 'Stormfiber', 'Nayatel',
-}
+
+# Pakistani mobile number, local or international, optionally with
+# spaces/dashes - mirrors nlp_module.extract_phone_number_pk()'s format.
+PK_PHONE_RE = re.compile(r'(?:0092|92|0)?3\d{9}$')
 
 # Amount guard rails — anything outside this range is rejected
 AMOUNT_MIN = 1
@@ -111,13 +104,9 @@ JSON SCHEMA YOU MUST RETURN (always all keys present):
   "intent": "<one of the valid intents below>",
   "entities": {
     "amount": <integer rupees or null>,
-    "recipient": "<string name or null>",
-    "transfer_method": "<IBAN|Account Number|Raast ID or null>",
-    "transfer_identifier": "<string IBAN/account number/Raast ID or null>",
-    "purpose": "<Rent|Salary|Business|Personal|Other or null>",
-    "description": "<Utility Bills|Grocery|Household Staff|Society Maintenance|Car & Fuel|Medical|Education|Entertainment|Rent|Transfer|Other or null>",
-    "bill_category": "<Electricity|Gas|Internet or null>",
-    "service_provider": "<K-Electric|LESCO|MEPCO|HESCO|SSGC|SNGPL|PTCL|Transworld|Stormfiber|Nayatel or null>",
+    "phone_number": "<string Pakistani mobile number or null>",
+    "account_number": "<string or null>",
+    "bill_type": "<electricity|gas|water|internet|ptcl or null>",
     "bill_reference": "<string or null>",
     "redemption_choice": <1 or 2 or null>
   },
@@ -129,7 +118,7 @@ JSON SCHEMA YOU MUST RETURN (always all keys present):
 VALID INTENTS:
 - check_balance      → user wants to see their account balance
 - transfer_money     → user wants to send money to someone
-- pay_bill           → user wants to pay an electricity, gas, or internet bill
+- pay_bill           → user wants to pay an electricity, gas, water or internet bill
 - transaction_history → user wants to see past transactions
 - redeem_points      → user wants to use/redeem their reward points
 - check_rewards      → user wants to know how many reward points they have
@@ -148,25 +137,20 @@ RULES:
 3. For amount: extract the number in Pakistani Rupees as an integer. Understand:
    - "5 hajar" = 5000, "do lakh" = 200000, "paanch sau" = 500
    - Ignore decimal amounts for banking transactions.
-4. For recipient: extract ONLY the person's name, nothing else.
-5. For transfer_method: map variants to exactly one of "IBAN", "Account Number", "Raast ID"
-   (e.g. "acc number"/"account no" → "Account Number", "raast" → "Raast ID").
-6. For transfer_identifier: extract the raw IBAN / account number / Raast ID string the
-   user typed, uppercased, with no spaces. Do not guess the format — just extract what's there.
-7. For purpose: map to exactly one of "Rent", "Salary", "Business", "Personal", "Other".
-8. For description: map to exactly one of "Utility Bills", "Grocery", "Household Staff",
-   "Society Maintenance", "Car & Fuel", "Medical", "Education", "Entertainment", "Rent",
-   "Transfer", "Other". This field is optional — if the user doesn't mention a category,
-   leave it null (the app defaults it to "Transfer").
-9. For bill_category: map all variants (bijli/bijlee/electric → "Electricity",
-   sui gas → "Gas", ptcl/internet → "Internet") to exactly "Electricity", "Gas", or "Internet".
-10. For service_provider: extract the specific company name (e.g. "LESCO", "SSGC", "PTCL")
-    if the user mentions one, matching exactly one of the values listed in the schema above.
-11. For conversational_reply: ONLY populate this when intent is "general_chat".
-    Write the reply in the SAME language the user used (English / Urdu / Roman Urdu).
-12. If a field is not present in the user message, set it to null.
-13. NEVER set intent to a payment/transfer action based on ambiguous input.
-    When in doubt, prefer "unknown" over a financial intent.
+4. For transfer_money and pay_bill: extract ONLY a phone number into
+   "phone_number" (Pakistani mobile format, e.g. 03001234567 or
+   +923001234567). NEVER extract, guess, or return a person's name for
+   any field, under any circumstance - not into "phone_number", not into
+   any other key, and not into "conversational_reply" either. The
+   recipient's identity is looked up server-side from the phone number;
+   you are not responsible for identifying who the money is going to, and
+   must not attempt to.
+5. For bill_type: map all variants (bijli/bijlee/electricity → electricity, pani/paani → water, etc.)
+6. For conversational_reply: ONLY populate this when intent is "general_chat".
+   Write the reply in the SAME language the user used (English / Urdu / Roman Urdu).
+7. If a field is not present in the user message, set it to null.
+8. NEVER set intent to a payment/transfer action based on ambiguous input.
+   When in doubt, prefer "unknown" over a financial intent.
 """
 
 
@@ -179,7 +163,7 @@ class LLMFallback:
     def __init__(self, api_key: str = None, model: str = "openai/gpt-oss-120b"):
         """
         api_key : your Groq API key (falls back to GROQ_API_KEY env var)
-        model   : Groq model ID — llama-3.3-70b-versatile is the best
+        model   : Groq model ID — openai/gpt-oss-120b is the best
                   balance of quality + speed for this task.
                   Cheaper alternative: "llama-3.1-8b-instant"
         """
@@ -208,7 +192,7 @@ class LLMFallback:
         user_message  : raw text from the user
         current_flow  : e.g. 'transfer_money' — gives the LLM context about
                         which slot it's currently trying to fill
-        flow_state    : e.g. 'TRANSFER_AWAIT_RECIPIENT' — finer context
+        flow_state    : e.g. 'TRANSFER_AWAIT_IDENTIFIER' — finer context
         language      : 'en' | 'ur' | 'ru' — drives reply language instruction
 
         Returns
@@ -350,14 +334,19 @@ class LLMFallback:
             except (TypeError, ValueError):
                 logger.warning("LLM amount '%s' is not an integer, discarded", raw_amount)
 
-        # recipient
-        raw_recipient = raw_entities.get('recipient')
-        if raw_recipient and isinstance(raw_recipient, str):
-            cleaned_recipient = raw_recipient.strip()
-            # Must contain at least one letter and no digits (names aren't numbers)
-            if re.search(r'[a-zA-Z\u0600-\u06FF]', cleaned_recipient) \
-                    and not re.fullmatch(r'\d+', cleaned_recipient):
-                entities['recipient'] = cleaned_recipient.title()
+        # phone_number (transfer_money / pay_bill target) — the ONLY way a
+        # transfer/bill-payment target may be identified. A recipient NAME
+        # is never accepted here even if the LLM mistakenly returns one:
+        # we validate strictly against the Pakistani mobile number shape
+        # and silently discard anything that doesn't match, rather than
+        # letting a name slip through under this key.
+        raw_phone = raw_entities.get('phone_number')
+        if raw_phone and isinstance(raw_phone, str):
+            digits_only = re.sub(r'[^\d]', '', raw_phone.strip())
+            if PK_PHONE_RE.fullmatch(digits_only):
+                # Normalize to local 03XXXXXXXXX form.
+                local_digits = digits_only[-10:]
+                entities['phone_number'] = '0' + local_digits
 
         # account_number
         raw_acc = raw_entities.get('account_number')
@@ -367,30 +356,12 @@ class LLMFallback:
             if re.fullmatch(r'[A-Z0-9]{6,20}', cleaned_acc):
                 entities['account_number'] = cleaned_acc
 
-        # bill_type (legacy, kept for backward compatibility)
+        # bill_type
         raw_bill_type = raw_entities.get('bill_type')
         if raw_bill_type and isinstance(raw_bill_type, str):
             bt = raw_bill_type.strip().lower()
             if bt in VALID_BILL_TYPES:
                 entities['bill_type'] = bt
-
-        # bill_category (new pay_bill first slot)
-        raw_bill_category = raw_entities.get('bill_category')
-        if raw_bill_category and isinstance(raw_bill_category, str):
-            bc = raw_bill_category.strip().title()
-            if bc in VALID_BILL_CATEGORIES:
-                entities['bill_category'] = bc
-
-        # service_provider (new pay_bill second slot)
-        raw_provider = raw_entities.get('service_provider')
-        if raw_provider and isinstance(raw_provider, str):
-            # Match case-insensitively against the known provider list so
-            # the LLM doesn't have to get capitalization exactly right
-            # (e.g. "lesco" -> "LESCO", "k-electric" -> "K-Electric").
-            provider_lookup = {p.lower(): p for p in VALID_SERVICE_PROVIDERS}
-            sp = raw_provider.strip().lower()
-            if sp in provider_lookup:
-                entities['service_provider'] = provider_lookup[sp]
 
         # bill_reference
         raw_ref = raw_entities.get('bill_reference')
@@ -398,41 +369,6 @@ class LLMFallback:
             cleaned_ref = re.sub(r'\s+', '', raw_ref.strip().upper())
             if re.fullmatch(r'[A-Z0-9]{4,20}', cleaned_ref):
                 entities['bill_reference'] = cleaned_ref
-
-        # transfer_method (new transfer_money second slot)
-        raw_method = raw_entities.get('transfer_method')
-        if raw_method and isinstance(raw_method, str):
-            method_lookup = {m.lower(): m for m in VALID_TRANSFER_METHODS}
-            tm = raw_method.strip().lower()
-            if tm in method_lookup:
-                entities['transfer_method'] = method_lookup[tm]
-
-        # transfer_identifier (new transfer_money third slot - IBAN /
-        # account number / Raast ID, format depends on transfer_method)
-        raw_identifier = raw_entities.get('transfer_identifier')
-        if raw_identifier and isinstance(raw_identifier, str):
-            cleaned_identifier = re.sub(r'\s+', '', raw_identifier.strip().upper())
-            # IBAN (24 chars) or a looser 6-34 char alphanumeric token
-            # (covers account numbers and Raast-ID phone numbers alike).
-            if re.fullmatch(r'[A-Z]{2}\d{2}[A-Z0-9]{16,20}', cleaned_identifier) \
-                    or re.fullmatch(r'[A-Z0-9]{6,34}', cleaned_identifier):
-                entities['transfer_identifier'] = cleaned_identifier
-
-        # purpose (new transfer_money fifth slot)
-        raw_purpose = raw_entities.get('purpose')
-        if raw_purpose and isinstance(raw_purpose, str):
-            purpose_lookup = {p.lower(): p for p in VALID_PURPOSES}
-            pu = raw_purpose.strip().lower()
-            if pu in purpose_lookup:
-                entities['purpose'] = purpose_lookup[pu]
-
-        # description (new transfer_money sixth, optional slot)
-        raw_description = raw_entities.get('description')
-        if raw_description and isinstance(raw_description, str):
-            description_lookup = {d.lower(): d for d in VALID_DESCRIPTIONS}
-            de = raw_description.strip().lower()
-            if de in description_lookup:
-                entities['description'] = description_lookup[de]
 
         # redemption_choice
         raw_choice = raw_entities.get('redemption_choice')

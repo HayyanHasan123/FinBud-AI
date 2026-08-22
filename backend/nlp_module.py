@@ -102,7 +102,12 @@ FLOW_STATE_TO_LEGACY_FLOW = {
 # transfer-money / pay-bill forms.
 FLOW_SLOT_ORDER = {
     'transfer_money': [
-        'recipient', 'transfer_method', 'transfer_identifier',
+        # 'recipient' is intentionally NOT a collected slot: the recipient's
+        # name is never asked for or parsed from free text. It is resolved
+        # automatically (via phone-number -> PostgreSQL lookup) as a
+        # side-effect of filling 'transfer_identifier', and injected
+        # straight into ctx['recipient'] at that point.
+        'transfer_method', 'transfer_identifier',
         'amount', 'purpose', 'description',
     ],
     'pay_bill': ['bill_category', 'service_provider', 'bill_reference', 'amount'],
@@ -119,7 +124,6 @@ FLOW_CONFIRMATION_STATE = {
 # keyed by (flow, slot_name). Used by the edit-previous-step utility to
 # know which state to rewind into after clearing a slot.
 FLOW_SLOT_STATE = {
-    ('transfer_money', 'recipient'): FlowState.TRANSFER_AWAIT_RECIPIENT,
     ('transfer_money', 'transfer_method'): FlowState.TRANSFER_AWAIT_METHOD,
     ('transfer_money', 'transfer_identifier'): FlowState.TRANSFER_AWAIT_IDENTIFIER,
     ('transfer_money', 'amount'): FlowState.TRANSFER_AWAIT_AMOUNT,
@@ -517,25 +521,25 @@ RESPONSES = {
         'ur': "آپ کا بیلنس \u2066RS {balance:,}\u2069 ہے",
         'ru': "Aap ka balance RS {balance:,} hai"
     },
-    'transfer_ask_recipient_name': {
-        'en': "👤 Who would you like to send money to? Please provide their name.",
-        'ur': "👤 آپ کسے پیسے بھیجنا چاہتے ہیں؟ براۓ کرم ان کا نام فراہم کریں۔",
-        'ru': "👤 Aap kise paisa bhejna chahte hain? Unka naam provide karein."
-    },
     'transfer_ask_method': {
         'en': "How would you like to send the money? Please choose: IBAN, Account Number, or Raast ID.",
-        'ur': "🏦 \u200Fآپ \u2066{recipient}\u2069 کو کس طریقے سے پیسے بھیجنا چاہتے ہیں؟ IBAN، Account Number، یا Raast ID میں سے چنیں۔",
+        'ur': "🏦 آپ کس طریقے سے پیسے بھیجنا چاہتے ہیں؟ IBAN، Account Number، یا Raast ID میں سے چنیں۔",
         'ru': "🏦 Aap kis tareeqe se paisa bhejna chahte hain? IBAN, Account Number, ya Raast ID mein se chunein."
     },
     'transfer_ask_identifier': {
-        'en': "Please provide the {transfer_method} for {recipient}.",
-        'ur': "🔢 \u200Fبراۓ کرم \u2066{recipient}\u2069 کا \u2066{transfer_method}\u2069 فراہم کریں۔",
-        'ru': "{recipient} ka {transfer_method} provide karein."
+        'en': "📱 Please enter the recipient's registered phone number (e.g. 03XXXXXXXXX). We'll look up their FinBud-AI account automatically.",
+        'ur': "📱 براۓ کرم وصول کنندہ کا رجسٹرڈ فون نمبر درج کریں (مثلاً 03XXXXXXXXX)۔ ہم خودکار طور پر ان کا FinBud-AI اکاؤنٹ تلاش کریں گے۔",
+        'ru': "📱 Recipient ka registered phone number enter karein (e.g. 03XXXXXXXXX). Hum unka FinBud-AI account automatically dhoond lenge."
     },
     'transfer_invalid_identifier': {
-        'en': "❌ That doesn't look like a valid IBAN, account number, or Raast ID. Please try again (e.g. account number ABC12345678).",
-        'ur': "❌ یہ درست IBAN، اکاؤنٹ نمبر، یا Raast ID نہیں لگتا۔ براۓ کرم دوبارہ کوشش کریں۔",
-        'ru': "❌ Yeh valid IBAN, account number, ya Raast ID nahi lagta. Dobara koshish karein (maslan account number ABC12345678)."
+        'en': "❌ That doesn't look like a valid Pakistani phone number. Please enter it as 03XXXXXXXXX or +923XXXXXXXXX.",
+        'ur': "❌ یہ درست پاکستانی فون نمبر نہیں لگتا۔ براۓ کرم 03XXXXXXXXX یا +923XXXXXXXXX کی صورت میں درج کریں۔",
+        'ru': "❌ Yeh valid Pakistani phone number nahi lagta. Isay 03XXXXXXXXX ya +923XXXXXXXXX ki soorat mein darj karein."
+    },
+    'transfer_phone_not_found': {
+        'en': "❌ No registered FinBud-AI account was found associated with this phone number. Please check the number and try again.",
+        'ur': "❌ اس فون نمبر سے منسلک کوئی رجسٹرڈ FinBud-AI اکاؤنٹ نہیں ملا۔ براۓ کرم نمبر چیک کریں اور دوبارہ کوشش کریں۔",
+        'ru': "❌ Is phone number se koi registered FinBud-AI account nahi mila. Number check karke dobara koshish karein."
     },
     'transfer_ask_amount': {
         'en': "How much would you like to transfer to {recipient}?",
@@ -699,11 +703,6 @@ RESPONSES = {
         'ur': "کوئی بات نہیں - نئی رقم کتنی ہونی چاہیے؟",
         'ru': "Koi baat nahi - naya amount kitna hona chahiye?"
     },
-    'edit_reprompt_recipient': {
-        'en': "Got it - who should this go to instead?",
-        'ur': "ٹھیک ہے - یہ کسے بھیجنا ہے؟",
-        'ru': "Theek hai - yeh kise bhejna hai?"
-    },
     'edit_reprompt_account_number': {
         'en': "Sure - what's the correct account number?",
         'ur': "ٹھیک ہے - درست اکاؤنٹ نمبر کیا ہے؟",
@@ -715,9 +714,9 @@ RESPONSES = {
         'ru': "Theek hai - konsa transfer method hona chahiye: IBAN, Account Number, ya Raast ID?"
     },
     'edit_reprompt_transfer_identifier': {
-        'en': "Sure - what's the correct IBAN / account number / Raast ID?",
-        'ur': "ٹھیک ہے - درست IBAN / اکاؤنٹ نمبر / Raast ID کیا ہے؟",
-        'ru': "Theek hai - sahi IBAN / account number / Raast ID kya hai?"
+        'en': "Sure - what's the correct phone number?",
+        'ur': "ٹھیک ہے - درست فون نمبر کیا ہے؟",
+        'ru': "Theek hai - sahi phone number kya hai?"
     },
     'edit_reprompt_purpose': {
         'en': "Got it - what should the purpose be instead?",
@@ -769,11 +768,6 @@ RESPONSES = {
         'ur': "صرف وہ رقم لکھیں جو آپ بھیجنا چاہتے ہیں، مثلاً \"5000\"۔",
         'ru': "Bas wo amount type karein jo aap bhejna chahte hain, maslan \"5000\"."
     },
-    'help_transfer_recipient': {
-        'en': "Type the name of the person you'd like to send money to.",
-        'ur': "اس شخص کا نام لکھیں جسے آپ پیسے بھیجنا چاہتے ہیں۔",
-        'ru': "Us shakhs ka naam type karein jise aap paisa bhejna chahte hain."
-    },
     'help_transfer_account': {
         'en': "Type the recipient's account number - a mix of letters and numbers, 6-20 characters (e.g. ABC12345678).",
         'ur': "وصول کنندہ کا اکاؤنٹ نمبر لکھیں - حروف اور ہندسوں کا مرکب، 6 سے 20 حروف (مثلاً ABC12345678)۔",
@@ -785,9 +779,9 @@ RESPONSES = {
         'ru': "Batayein aap kis tareeqe se paisa bhejna chahte hain: IBAN, Account Number, ya Raast ID."
     },
     'help_transfer_identifier': {
-        'en': "Type the recipient's IBAN, account number, or Raast ID, depending on the method you chose.",
-        'ur': "وصول کنندہ کا IBAN، اکاؤنٹ نمبر، یا Raast ID لکھیں، جو طریقہ آپ نے چنا ہے اس کے مطابق۔",
-        'ru': "Recipient ka IBAN, account number, ya Raast ID type karein, jo method aap ne chuna hai us ke mutabiq."
+        'en': "Type the recipient's registered phone number, e.g. 03001234567. We'll automatically find their name and account.",
+        'ur': "وصول کنندہ کا رجسٹرڈ فون نمبر لکھیں، مثلاً 03001234567۔ ہم خودکار طور پر ان کا نام اور اکاؤنٹ تلاش کر لیں گے۔",
+        'ru': "Recipient ka registered phone number type karein, e.g. 03001234567. Hum automatically unka naam aur account dhoond lenge."
     },
     'help_transfer_purpose': {
         'en': "Tell me the purpose of this transfer: Rent, Salary, Business, Personal, or Other.",
@@ -1543,38 +1537,60 @@ def extract_transfer_method(text: str) -> Optional[str]:
 
 def extract_transfer_identifier(text: str) -> Optional[str]:
     """
-    Extract the recipient's destination identifier for a transfer.
+    Extract the transfer target for a transfer_money flow.
 
-    A Slot extractor only ever sees raw text (no access to which
-    transfer_method was previously chosen), so this recognizes any of the
-    three formats the app supports and accepts whichever matches:
-      - IBAN: 2 letters (country code) + 22 alphanumeric chars = 24 total
-        (e.g. PK36SCBL0000001123456702).
-      - Raast ID: an 11-digit Pakistani mobile number (03XXXXXXXXX),
-        optionally with a +92/0092/92 country-code prefix.
-      - Account Number: falls back to the existing account-number rules
-        (6-20 char mix of letters and digits).
+    Destination targets are now ALWAYS a Pakistani phone number - the app
+    no longer accepts raw alphanumeric account codes or IBANs as a typed
+    target. The phone number is resolved against PostgreSQL
+    (users.phone -> account_number, name) elsewhere in the pipeline; this
+    function's only job is to recognize and normalize the phone number
+    itself. Delegates to extract_phone_number_pk().
+    """
+    return extract_phone_number_pk(text)
+
+
+def extract_phone_number_pk(text: str) -> Optional[str]:
+    """
+    Extract and normalize a Pakistani mobile number from free text.
+
+    Accepts local format (03XXXXXXXXX / 03XX-XXXXXXX) and international
+    format (+923XXXXXXXXX / 00923XXXXXXXXX / 923XXXXXXXXX). Returns the
+    number normalized to local 11-digit form '03XXXXXXXXX', or None if no
+    valid Pakistani mobile number is found in the text.
     """
     raw = text.strip()
     if not raw:
         return None
 
-    cleaned = raw.upper()
-    cleaned = re.sub(r'\b(IBAN|ACCOUNT|NUMBER|ACC|NO|RAAST|ID)\b', '', cleaned)
-    cleaned = re.sub(r'[\s-]', '', cleaned).strip()
+    # Reject obvious full-sentence instructions rather than a bare number
+    # (e.g. "send 300 to him" contains no phone number anyway, but guard
+    # against accidentally matching a stray digit run inside a longer
+    # instruction that mixes an amount and other digits).
+    digits_only = re.sub(r'[^\d+]', '', raw)
+    digits_only = digits_only.replace('+', '')
 
-    # IBAN check
-    if re.fullmatch(r'[A-Z]{2}\d{2}[A-Z0-9]{16,20}', cleaned) and len(cleaned) <= 34:
-        return cleaned
-
-    # Raast ID (mobile number) check
-    digits_only = re.sub(r'\D', '', cleaned)
-    phone_match = re.fullmatch(r'(?:0092|92|0)?(3\d{9})', digits_only)
+    phone_match = re.search(r'(?:0092|92|0)?(3\d{9})\b', digits_only)
     if phone_match:
         return '0' + phone_match.group(1)
 
-    # Fall back to the generic account-number validator.
-    return validate_account_number(text)
+    return None
+
+
+# Set by app.py at startup via set_recipient_resolver(). Given a normalized
+# phone number ('03XXXXXXXXX'), must return {'account_number': ..., 'name': ...}
+# on success or None if no registered user matches that phone number.
+_recipient_resolver: Optional[Callable[[str], Optional[Dict[str, str]]]] = None
+
+
+def set_recipient_resolver(resolver_fn: Callable[[str], Optional[Dict[str, str]]]) -> None:
+    """
+    Registers the PostgreSQL-backed phone -> (account_number, name) lookup
+    function used to auto-resolve transfer recipients. Must be called once
+    at app startup (see app.py). Never asks the user for a name directly -
+    resolution is always via this DB lookup.
+    """
+    global _recipient_resolver
+    _recipient_resolver = resolver_fn
 
 
 PURPOSE_MAP = {
@@ -1758,11 +1774,11 @@ def strip_amount_substring(user_message: str) -> str:
 
 
 TRANSFER_SLOTS = {
-    'recipient': Slot(
-        name='recipient',
-        extractor=extract_recipient_name_for_transfer_followup,
-        on_missing_response_key='transfer_ask_recipient_name',
-    ),
+    # NOTE: there is deliberately no 'recipient' slot here. The recipient's
+    # name is never requested from, or parsed out of, the user's free text.
+    # It is populated automatically in run_flow_step() the moment
+    # 'transfer_identifier' (the phone number) is filled and resolved
+    # against PostgreSQL.
     'transfer_method': Slot(
         name='transfer_method',
         extractor=extract_transfer_method,
@@ -1822,7 +1838,6 @@ FLOW_SLOTS = {
 # Help-template key for each (flow, slot) pair - used by the contextual
 # help interceptor.
 HELP_KEY_FOR_SLOT = {
-    ('transfer_money', 'recipient'): 'help_transfer_recipient',
     ('transfer_money', 'transfer_method'): 'help_transfer_method',
     ('transfer_money', 'transfer_identifier'): 'help_transfer_identifier',
     ('transfer_money', 'amount'): 'help_transfer_amount',
@@ -1839,7 +1854,6 @@ HELP_KEY_FOR_SLOT = {
 # case. Falls back to f'{slot}_missing' for any slot not listed here.
 CLARIFICATION_TYPE_FOR_SLOT = {
     'amount': 'amount_missing',
-    'recipient': 'recipient_name_missing',
     'transfer_method': 'transfer_method_missing',
     'transfer_identifier': 'transfer_identifier_missing',
     'purpose': 'purpose_missing',
@@ -1994,7 +2008,7 @@ def _passthrough_flow_fields(ctx: Dict) -> Dict:
         passthrough['current_flow'] = ctx['current_flow']
     if ctx.get('flow_state'):
         passthrough['flow_state'] = ctx['flow_state']
-    for key in ('amount', 'recipient', 'transfer_method', 'transfer_identifier',
+    for key in ('amount', 'recipient', 'account_number', 'transfer_method', 'transfer_identifier',
                 'purpose', 'description', 'bill_category', 'service_provider',
                 'bill_reference', 'redemption_choice', 'provider_hint'):
         if key in ctx:
@@ -2103,6 +2117,19 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
         # leave a stale, mismatched provider behind.
         new_ctx.pop('service_provider', None)
         new_ctx.pop('provider_hint', None)
+
+    if current_flow == 'transfer_money' and target_slot == 'transfer_identifier':
+        # recipient / account_number are derived FROM the phone number via
+        # DB lookup, not typed directly - clear them too so editing the
+        # phone number can never leave a stale name/account attached to a
+        # newly-edited number. Route back through run_flow_step's normal
+        # extraction path (not the inline skip_extraction shortcut below)
+        # so the new number goes through the same PostgreSQL resolution
+        # step as a first-time entry.
+        new_ctx.pop('recipient', None)
+        new_ctx.pop('account_number', None)
+        return run_flow_step(user_message=stripped_text, ctx=new_ctx, language=language,
+                              force_flow=current_flow, skip_extraction=False)
 
     if new_value is not None:
         # Value supplied inline - apply it immediately and move forward
@@ -2222,8 +2249,13 @@ def _enter_password_state(current_flow: str, ctx: Dict, language: str) -> Dict:
         amount, recipient = ctx['amount'], ctx['recipient']
         transfer_method, transfer_identifier = ctx['transfer_method'], ctx['transfer_identifier']
         purpose, description = ctx['purpose'], ctx['description']
+        # account_number is the DB-resolved target account (from the
+        # phone-number lookup) - always carried through to the password
+        # step so app.py can post the transaction against the correct
+        # account, not the raw phone number itself.
         pending_entities = {
             'amount': amount, 'recipient': recipient,
+            'account_number': ctx.get('account_number'),
             'transfer_method': transfer_method, 'transfer_identifier': transfer_identifier,
             'purpose': purpose, 'description': description,
         }
@@ -2288,11 +2320,16 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         new_ctx['flow_state'] = FLOW_CONFIRMATION_STATE[current_flow].name
         ai_response = _render_confirmation_prompt(current_flow, new_ctx, effective_language)
 
+        entities = {k: new_ctx[k] for k in slot_order}
+        for extra_key in ('recipient', 'account_number'):
+            if new_ctx.get(extra_key) is not None:
+                entities[extra_key] = new_ctx[extra_key]
+
         result = {
             'intent': current_flow,
             'language': effective_language,
             'session_language': ctx.get('session_language', language),
-            'entities': {k: new_ctx[k] for k in slot_order},
+            'entities': entities,
             'needs_clarification': True,
             'clarification_type': 'confirmation_required',
             'requires_human': False,
@@ -2304,6 +2341,9 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         }
         for key in slot_order:
             result[key] = new_ctx[key]
+        for extra_key in ('recipient', 'account_number'):
+            if new_ctx.get(extra_key) is not None:
+                result[extra_key] = new_ctx[extra_key]
         return result
 
     slot_def = slots[target_slot]
@@ -2323,17 +2363,56 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
     except Exception:
         extracted = None
 
-    # Special-case the very first slot of transfer_money: try to also pull
-    # the amount out of the same message (e.g. "send Ahmed 5000" gives both
-    # the recipient and the amount in one turn), instead of always asking
-    # for the amount again several turns later.
-    if (current_flow == 'transfer_money' and target_slot == 'recipient'
+    # Special-case transfer_money's 'transfer_identifier' slot: this is now
+    # always a phone number, and the moment it's captured we resolve it
+    # against PostgreSQL (users.phone -> account_number, name) instead of
+    # ever asking the user for a recipient name. If the phone number isn't
+    # registered, we intercept here with a clear error and keep waiting at
+    # this same slot; the entity slot itself is left unset (never partially
+    # filled with an unverified target). If it IS registered, recipient +
+    # account_number are injected into ctx and we advance straight past
+    # 'recipient' (which isn't even a collected slot) to whatever's next -
+    # Amount, then Purpose/Description/Confirmation - with no intermediate
+    # prompting.
+    if (current_flow == 'transfer_money' and target_slot == 'transfer_identifier'
             and extracted is not None):
+        resolved = None
+        if _recipient_resolver is not None:
+            try:
+                resolved = _recipient_resolver(extracted)
+            except Exception:
+                resolved = None
+
+        if not resolved:
+            ai_response = RESPONSES['transfer_phone_not_found'][effective_language]
+            result = {
+                'intent': current_flow,
+                'language': effective_language,
+                'session_language': ctx.get('session_language', language),
+                'entities': {},
+                'needs_clarification': True,
+                'clarification_type': 'transfer_identifier_not_found',
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalized,
+                'ai_response': ai_response,
+                'current_flow': current_flow,
+                'flow_state': FLOW_SLOT_STATE[(current_flow, target_slot)].name,
+            }
+            for key in slot_order:
+                if key != target_slot and ctx.get(key):
+                    result[key] = ctx[key]
+            return result
+
         new_ctx = dict(ctx)
-        new_ctx['recipient'] = extracted
+        new_ctx['transfer_identifier'] = extracted
+        new_ctx['recipient'] = resolved['name']
+        new_ctx['account_number'] = resolved['account_number']
         new_ctx['current_flow'] = current_flow
+        # Also try to pull the amount out of the same message (e.g. "send
+        # 03001234567 5000") instead of always asking for it separately.
         bonus_amount = extract_amount(user_message)
-        if bonus_amount is not None:
+        if bonus_amount is not None and not new_ctx.get('amount'):
             new_ctx['amount'] = bonus_amount
         result = run_flow_step(user_message="", ctx=new_ctx, language=language,
                                 force_flow=current_flow, skip_extraction=True)
@@ -2373,6 +2452,9 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         for key in slot_order:
             if key != target_slot and ctx.get(key):
                 result[key] = ctx[key]
+        for extra_key in ('recipient', 'account_number'):
+            if ctx.get(extra_key) is not None:
+                result[extra_key] = ctx[extra_key]
         if ctx.get('provider_hint'):
             result['provider_hint'] = ctx['provider_hint']
         return result
@@ -2777,8 +2859,19 @@ class BankAIConversation:
                                        force_flow='transfer_money')
                 result['session_language'] = language
                 result['llm_used'] = True
-                for key in ('amount', 'recipient', 'transfer_method',
-                            'transfer_identifier', 'purpose', 'description'):
+                # NOTE: 'recipient' is intentionally excluded here. The
+                # fallback LLM (see llm_fallback.py) is instructed to never
+                # extract a recipient name for transfer_money/bill_payments.
+                # 'transfer_identifier' (the phone number) is ALSO excluded
+                # from this post-hoc merge on purpose: run_flow_step()
+                # already re-runs the same phone-number regex directly
+                # against user_message and, on a match, performs the
+                # PostgreSQL resolution step. Patching a phone number into
+                # result['entities'] here afterwards would bypass that
+                # resolution entirely and leave 'recipient'/'account_number'
+                # unset, so we let the regex extraction path be the single
+                # source of truth for this slot.
+                for key in ('amount', 'transfer_method', 'purpose', 'description'):
                     if llm_entities.get(key) and not result['entities'].get(key):
                         result['entities'][key] = llm_entities[key]
                 return result
