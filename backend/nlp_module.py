@@ -526,6 +526,11 @@ RESPONSES = {
         'ur': "🏦 آپ کس طریقے سے پیسے بھیجنا چاہتے ہیں؟ IBAN، Account Number، یا Raast ID میں سے چنیں۔",
         'ru': "🏦 Aap kis tareeqe se paisa bhejna chahte hain? IBAN, Account Number, ya Raast ID mein se chunein."
     },
+    'transfer_method_invalid': {
+        'en': "❌ Sorry, I didn't recognize that. Please reply with one of: IBAN, Account Number, or Raast ID.",
+        'ur': "❌ معذرت، یہ سمجھ نہیں آیا۔ براۓ کرم ان میں سے کوئی ایک لکھیں: IBAN، Account Number، یا Raast ID۔",
+        'ru': "❌ Maaf karein, yeh samajh nahi aaya. In mein se koi ek likhein: IBAN, Account Number, ya Raast ID."
+    },
     'transfer_ask_identifier': {
         'en': "📱 Please enter the recipient's registered phone number (e.g. 03XXXXXXXXX). We'll look up their FinBud-AI account automatically.",
         'ur': "📱 براۓ کرم وصول کنندہ کا رجسٹرڈ فون نمبر درج کریں (مثلاً 03XXXXXXXXX)۔ ہم خودکار طور پر ان کا FinBud-AI اکاؤنٹ تلاش کریں گے۔",
@@ -535,6 +540,36 @@ RESPONSES = {
         'en': "❌ That doesn't look like a valid Pakistani phone number. Please enter it as 03XXXXXXXXX or +923XXXXXXXXX.",
         'ur': "❌ یہ درست پاکستانی فون نمبر نہیں لگتا۔ براۓ کرم 03XXXXXXXXX یا +923XXXXXXXXX کی صورت میں درج کریں۔",
         'ru': "❌ Yeh valid Pakistani phone number nahi lagta. Isay 03XXXXXXXXX ya +923XXXXXXXXX ki soorat mein darj karein."
+    },
+    'transfer_ask_identifier_iban': {
+        'en': "🏦 Please enter the recipient's IBAN. A Pakistani IBAN is 24 characters: 'PK' + 2 digits + 4-letter bank code + 16 digits (e.g. PK36SCBL0000001123456702).",
+        'ur': "🏦 براۓ کرم وصول کنندہ کا IBAN درج کریں۔ پاکستانی IBAN 24 حروف کا ہوتا ہے: 'PK' + 2 ہندسے + بینک کوڈ + 16 ہندسے (مثلاً PK36SCBL0000001123456702)۔",
+        'ru': "🏦 Recipient ka IBAN enter karein. Pakistani IBAN 24 characters ka hota hai: 'PK' + 2 digits + bank code + 16 digits (e.g. PK36SCBL0000001123456702)."
+    },
+    'transfer_invalid_identifier_iban': {
+        'en': "❌ That doesn't look like a valid IBAN. A Pakistani IBAN is 24 characters: 'PK' + 2 digits + 4-letter bank code + 16 digits (e.g. PK36SCBL0000001123456702).",
+        'ur': "❌ یہ درست IBAN نہیں لگتا۔ پاکستانی IBAN 24 حروف کا ہوتا ہے: 'PK' + 2 ہندسے + بینک کوڈ + 16 ہندسے (مثلاً PK36SCBL0000001123456702)۔",
+        'ru': "❌ Yeh valid IBAN nahi lagta. Pakistani IBAN 24 characters ka hota hai: 'PK' + 2 digits + bank code + 16 digits (e.g. PK36SCBL0000001123456702)."
+    },
+    'transfer_ask_identifier_account': {
+        'en': "🏦 Please enter the recipient's account number (8-16 digits, numbers only).",
+        'ur': "🏦 براۓ کرم وصول کنندہ کا اکاؤنٹ نمبر درج کریں (8-16 ہندسے، صرف نمبر)۔",
+        'ru': "🏦 Recipient ka account number enter karein (8-16 digits, sirf numbers)."
+    },
+    'transfer_invalid_identifier_account': {
+        'en': "❌ That doesn't look like a valid account number. Please enter 8-16 digits only.",
+        'ur': "❌ یہ درست اکاؤنٹ نمبر نہیں لگتا۔ براۓ کرم صرف 8-16 ہندسے درج کریں۔",
+        'ru': "❌ Yeh valid account number nahi lagta. Sirf 8-16 digits darj karein."
+    },
+    'transfer_recipient_found': {
+        'en': "✅ We found a FinBud-AI account for {name}. Send this transfer to {name}? (yes/no)",
+        'ur': "✅ ہمیں \u2066{name}\u2069 کا FinBud-AI اکاؤنٹ مل گیا ہے۔ کیا یہ ٹرانسفر \u2066{name}\u2069 کو بھیجنا ہے؟ (yes/no)",
+        'ru': "✅ Humein {name} ka FinBud-AI account mil gaya hai. Kya yeh transfer {name} ko bhejna hai? (yes/no)"
+    },
+    'transfer_ask_recipient_name': {
+        'en': "👤 We can't verify this account automatically since it's outside FinBud-AI. Please type the recipient's full name so we can include it on the transfer.",
+        'ur': "👤 چونکہ یہ اکاؤنٹ FinBud-AI کے باہر کا ہے، ہم خودکار طور پر تصدیق نہیں کر سکتے۔ براۓ کرم وصول کنندہ کا پورا نام لکھیں۔",
+        'ru': "👤 Yeh account FinBud-AI ke bahar ka hai, is liye hum automatically verify nahi kar sakte. Recipient ka pura naam likhein."
     },
     'transfer_phone_not_found': {
         'en': "❌ No registered FinBud-AI account was found associated with this phone number. Please check the number and try again.",
@@ -1623,6 +1658,25 @@ def set_recipient_resolver(resolver_fn: Callable[[str], Optional[Dict[str, str]]
     _recipient_resolver = resolver_fn
 
 
+# Set by app.py at startup via set_account_resolver(). Given a raw account
+# number string, must return {'account_number': ..., 'name': ...} on success
+# or None if it doesn't match any FinBud-AI account (e.g. it's a real
+# external bank account number, which is expected and NOT an error).
+_account_resolver: Optional[Callable[[str], Optional[Dict[str, str]]]] = None
+
+
+def set_account_resolver(resolver_fn: Callable[[str], Optional[Dict[str, str]]]) -> None:
+    """
+    Registers the PostgreSQL-backed account_number -> (account_number, name)
+    lookup used when the user picks "Account Number" as the transfer method.
+    Unlike set_recipient_resolver(), a miss here is NOT treated as an error -
+    it just means the number belongs to an external bank, so the flow falls
+    back to asking the user to type the recipient's name manually.
+    """
+    global _account_resolver
+    _account_resolver = resolver_fn
+
+
 PURPOSE_MAP = {
     'rent': 'Rent',
     'salary': 'Salary',
@@ -1813,6 +1867,7 @@ TRANSFER_SLOTS = {
         name='transfer_method',
         extractor=extract_transfer_method,
         on_missing_response_key='transfer_ask_method',
+        on_invalid_response_key='transfer_method_invalid',
     ),
     'transfer_identifier': Slot(
         name='transfer_identifier',
@@ -2256,6 +2311,104 @@ def handle_confirmation_step(user_message: str, ctx: Dict, language: str) -> Dic
     return result
 
 
+def handle_recipient_step(user_message: str, ctx: Dict, language: str) -> Dict:
+    """
+    Handles a turn where ctx['flow_state'] is TRANSFER_AWAIT_RECIPIENT. Two
+    distinct modes share this state:
+      - DB-resolved recipient (ctx['account_number'] already set from a
+        Raast ID / Account Number match): expects yes/no confirming the
+        auto-looked-up name is who the user meant to send to.
+      - External/manual recipient (ctx['_awaiting_manual_recipient_name']
+        is True, i.e. an IBAN or an unlisted account number): expects
+        free-text with the recipient's name, since there's nothing FinBud
+        can look up automatically for an external bank account.
+    """
+    current_flow = ctx['current_flow']
+    normalized = normalize_slang(user_message)
+    effective_language = ctx.get('session_language', language)
+
+    if ctx.get('_awaiting_manual_recipient_name'):
+        name = user_message.strip()
+        if not name or len(name) < 2:
+            result = {
+                'intent': current_flow,
+                'language': effective_language,
+                'session_language': ctx.get('session_language', language),
+                'entities': {},
+                'needs_clarification': True,
+                'clarification_type': 'transfer_recipient_name_missing',
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalized,
+                'ai_response': RESPONSES['transfer_ask_recipient_name'][effective_language],
+                'current_flow': current_flow,
+                'flow_state': FlowState.TRANSFER_AWAIT_RECIPIENT.name,
+                'transfer_identifier': ctx.get('transfer_identifier'),
+                'transfer_method': ctx.get('transfer_method'),
+                '_awaiting_manual_recipient_name': True,
+            }
+            return result
+
+        new_ctx = dict(ctx)
+        new_ctx.pop('_awaiting_manual_recipient_name', None)
+        new_ctx['recipient'] = name
+        new_ctx['current_flow'] = current_flow
+        result = run_flow_step(user_message="", ctx=new_ctx, language=language,
+                                force_flow=current_flow, skip_extraction=True)
+        result['session_language'] = ctx.get('session_language', language)
+        return result
+
+    # DB-resolved recipient - expects a yes/no confirmation.
+    if _matches_any(normalized, AFFIRMATIVE_PATTERNS):
+        new_ctx = dict(ctx)
+        new_ctx['current_flow'] = current_flow
+        result = run_flow_step(user_message="", ctx=new_ctx, language=language,
+                                force_flow=current_flow, skip_extraction=True)
+        result['session_language'] = ctx.get('session_language', language)
+        return result
+
+    if _matches_any(normalized, NEGATIVE_PATTERNS):
+        # Wrong person - clear the resolved identity and go back to asking
+        # for the identifier again, through the normal extraction path so
+        # the newly-typed number gets the same method-aware validation.
+        new_ctx = dict(ctx)
+        new_ctx.pop('recipient', None)
+        new_ctx.pop('account_number', None)
+        new_ctx.pop('transfer_identifier', None)
+        new_ctx['current_flow'] = current_flow
+        result = run_flow_step(user_message="", ctx=new_ctx, language=language,
+                                force_flow=current_flow, skip_extraction=False)
+        result['session_language'] = ctx.get('session_language', language)
+        return result
+
+    # Ambiguous - re-ask without guessing.
+    ai_response = (
+        RESPONSES['confirmation_unclear'][effective_language] + "\n" +
+        RESPONSES['transfer_recipient_found'][effective_language].format(
+            name=ctx.get('recipient', '')
+        )
+    )
+    result = {
+        'intent': current_flow,
+        'language': effective_language,
+        'session_language': ctx.get('session_language', language),
+        'entities': {},
+        'needs_clarification': True,
+        'clarification_type': 'transfer_recipient_confirmation',
+        'requires_human': False,
+        'handoff_reason': None,
+        'normalized_text': normalized,
+        'ai_response': ai_response,
+        'current_flow': current_flow,
+        'flow_state': FlowState.TRANSFER_AWAIT_RECIPIENT.name,
+        'recipient': ctx.get('recipient'),
+        'account_number': ctx.get('account_number'),
+        'transfer_identifier': ctx.get('transfer_identifier'),
+        'transfer_method': ctx.get('transfer_method'),
+    }
+    return result
+
+
 def _render_confirmation_prompt(current_flow: str, ctx: Dict, language: str) -> str:
     if current_flow == 'transfer_money':
         return RESPONSES['transfer_confirm'][language].format(
@@ -2326,6 +2479,15 @@ def _enter_password_state(current_flow: str, ctx: Dict, language: str) -> Dict:
 def run_flow_step(user_message: str, ctx: Dict, language: str,
                    force_flow: Optional[str] = None,
                    skip_extraction: bool = False) -> Dict:
+    # Whether this flow was already active *before* this call - i.e. the
+    # user was already sitting at some slot's prompt and this message is
+    # their reply to it, as opposed to a fresh "transfer money" that's
+    # simultaneously triggering the flow AND being fed in as if it were an
+    # answer to the very first slot. Only in the former case does failing
+    # to extract a value mean the user actually gave an "invalid" answer -
+    # on a fresh entry it just means the opening message didn't happen to
+    # mention that slot's value yet, which is a normal "missing" case.
+    flow_was_already_active = 'current_flow' in ctx
     current_flow = force_flow or ctx['current_flow']
     slot_order = FLOW_SLOT_ORDER[current_flow]
     slots = FLOW_SLOTS[current_flow]
@@ -2443,11 +2605,12 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
                     result[key] = ctx[key]
             return result
 
+        resolved = None
         if chosen_method == 'Raast ID':
             # Raast ID is Pakistan's real mobile-number-linked transfer
-            # rail, so (and only so) this path auto-resolves the phone
-            # number against PostgreSQL instead of asking for a name.
-            resolved = None
+            # rail, so this path always tries to resolve the phone number
+            # against PostgreSQL. Unlike Account Number below, a miss here
+            # IS an error - there's no such thing as an "external" Raast ID.
             if _recipient_resolver is not None:
                 try:
                     resolved = _recipient_resolver(extracted)
@@ -2475,44 +2638,103 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
                         result[key] = ctx[key]
                 return result
 
+        elif chosen_method == 'Account Number':
+            # Try resolving against FinBud's own accounts first - this is
+            # the same underlying bank, so a match here is very likely.
+            # Unlike Raast ID, a MISS is not an error: it just means the
+            # number belongs to some other bank, so we fall through to the
+            # manual-name path below instead of blocking the user.
+            if _account_resolver is not None:
+                try:
+                    resolved = _account_resolver(extracted)
+                except Exception:
+                    resolved = None
+
+        if resolved:
+            # DB match (Raast ID, or an Account Number that happens to be a
+            # FinBud-AI account) - don't silently assume this is the right
+            # person; ask the user to confirm the looked-up name before
+            # moving on to amount/purpose/etc.
             new_ctx = dict(ctx)
             new_ctx['transfer_identifier'] = extracted
             new_ctx['recipient'] = resolved['name']
             new_ctx['account_number'] = resolved['account_number']
-        else:
-            # IBAN / Account Number are treated as external-bank legs (same
-            # model as the manual transfer UI's execute_transfer 'bank'
-            # method): there's no FinBud account to auto-verify a name
-            # against here, so we accept the identifier as-is and label the
-            # recipient generically. The bank/1LINK leg (execute_transfer)
-            # is what actually validates and settles these.
-            new_ctx = dict(ctx)
-            new_ctx['transfer_identifier'] = extracted
-            new_ctx['recipient'] = (
-                f"Bank Account (…{extracted[-4:]})" if chosen_method == 'Account Number'
-                else f"IBAN Account (…{extracted[-4:]})"
+            new_ctx['current_flow'] = current_flow
+            ai_response = RESPONSES['transfer_recipient_found'][effective_language].format(
+                name=resolved['name']
             )
+            result = {
+                'intent': current_flow,
+                'language': effective_language,
+                'session_language': ctx.get('session_language', language),
+                'entities': {},
+                'needs_clarification': True,
+                'clarification_type': 'transfer_recipient_confirmation',
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalized,
+                'ai_response': ai_response,
+                'current_flow': current_flow,
+                'flow_state': FlowState.TRANSFER_AWAIT_RECIPIENT.name,
+                'recipient': resolved['name'],
+                'account_number': resolved['account_number'],
+                'transfer_identifier': extracted,
+                'transfer_method': chosen_method,
+            }
+            return result
 
+        # No DB match: IBAN, or an Account Number that isn't a FinBud-AI
+        # account. This is an external-bank transfer - there's no name to
+        # auto-verify, so ask the user to type it in directly rather than
+        # inventing a placeholder like "Bank Account (...1234)".
+        new_ctx = dict(ctx)
+        new_ctx['transfer_identifier'] = extracted
         new_ctx['current_flow'] = current_flow
-        # Also try to pull the amount out of the same message (e.g. "send
-        # 03001234567 5000") instead of always asking for it separately.
-        bonus_amount = extract_amount(user_message)
-        if bonus_amount is not None and not new_ctx.get('amount'):
-            new_ctx['amount'] = bonus_amount
-        result = run_flow_step(user_message="", ctx=new_ctx, language=language,
-                                force_flow=current_flow, skip_extraction=True)
-        result['session_language'] = ctx.get('session_language', language)
+        new_ctx['_awaiting_manual_recipient_name'] = True
+        ai_response = RESPONSES['transfer_ask_recipient_name'][effective_language]
+        result = {
+            'intent': current_flow,
+            'language': effective_language,
+            'session_language': ctx.get('session_language', language),
+            'entities': {},
+            'needs_clarification': True,
+            'clarification_type': 'transfer_recipient_name_missing',
+            'requires_human': False,
+            'handoff_reason': None,
+            'normalized_text': normalized,
+            'ai_response': ai_response,
+            'current_flow': current_flow,
+            'flow_state': FlowState.TRANSFER_AWAIT_RECIPIENT.name,
+            'transfer_identifier': extracted,
+            'transfer_method': chosen_method,
+            '_awaiting_manual_recipient_name': True,
+        }
         return result
 
     if slot_def.validator and extracted is not None and not slot_def.validator(extracted):
         extracted = None
 
     if extracted is None:
-        response_key = (
+        is_ask = not (
             slot_def.on_invalid_response_key
-            if (slot_def.on_invalid_response_key and user_message.strip())
-            else slot_def.on_missing_response_key
+            and user_message.strip()
+            and flow_was_already_active
         )
+        response_key = (
+            slot_def.on_missing_response_key if is_ask else slot_def.on_invalid_response_key
+        )
+
+        # transfer_identifier's ask/invalid prompts depend on which
+        # transfer_method was chosen (IBAN / Account Number / Raast ID) -
+        # a phone-number-shaped prompt makes no sense once IBAN or Account
+        # Number has been selected, so swap in the matching variant here.
+        if current_flow == 'transfer_money' and target_slot == 'transfer_identifier':
+            method = ctx.get('transfer_method')
+            if method == 'IBAN':
+                response_key = 'transfer_ask_identifier_iban' if is_ask else 'transfer_invalid_identifier_iban'
+            elif method == 'Account Number':
+                response_key = 'transfer_ask_identifier_account' if is_ask else 'transfer_invalid_identifier_account'
+
         ai_response_template = RESPONSES[response_key][effective_language]
         ai_response = _format_with_ctx(ai_response_template, ctx)
 
@@ -2524,7 +2746,7 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
             'needs_clarification': True,
             'clarification_type': (
                 CLARIFICATION_TYPE_FOR_SLOT.get(target_slot, f'{target_slot}_missing')
-                if response_key == slot_def.on_missing_response_key
+                if is_ask
                 else f'invalid_{target_slot}'
             ),
             'requires_human': False,
@@ -2849,6 +3071,13 @@ class BankAIConversation:
                                  FlowState.BILL_AWAIT_CONFIRMATION.name)
                 or all_slots_filled):
             return handle_confirmation_step(user_message, ctx, language)
+
+        # Recipient-confirmation gate (see handle_recipient_step) - must be
+        # checked before the generic run_flow_step dispatch below, or a
+        # "yes"/"no"/typed name here would get misinterpreted as an answer
+        # for whatever slot comes after transfer_identifier (e.g. amount).
+        if flow_state_name == FlowState.TRANSFER_AWAIT_RECIPIENT.name:
+            return handle_recipient_step(user_message, ctx, language)
 
         # Active table-driven flows.
         current_flow = ctx.get('current_flow')
