@@ -541,6 +541,11 @@ RESPONSES = {
         'ur': "❌ اس فون نمبر سے منسلک کوئی رجسٹرڈ FinBud-AI اکاؤنٹ نہیں ملا۔ براۓ کرم نمبر چیک کریں اور دوبارہ کوشش کریں۔",
         'ru': "❌ Is phone number se koi registered FinBud-AI account nahi mila. Number check karke dobara koshish karein."
     },
+    'transfer_identifier_wrong_format': {
+        'en': "❌ That doesn't look like a valid {transfer_method}. Please enter it in the correct format for {transfer_method}.",
+        'ur': "❌ یہ درست \u2066{transfer_method}\u2069 نہیں لگتا۔ براۓ کرم \u2066{transfer_method}\u2069 کے درست فارمیٹ میں درج کریں۔",
+        'ru': "❌ Yeh valid {transfer_method} nahi lagta. Correct format mein {transfer_method} enter karein."
+    },
     'transfer_ask_amount': {
         'en': "How much would you like to transfer to {recipient}?",
         'ur': "💰 \u200Fآپ \u2066{recipient}\u2069 کو کتنی رقم منتقل کرنا چاہتے ہیں؟",
@@ -1537,16 +1542,41 @@ def extract_transfer_method(text: str) -> Optional[str]:
 
 def extract_transfer_identifier(text: str) -> Optional[str]:
     """
-    Extract the transfer target for a transfer_money flow.
+    Extract the recipient's destination identifier for a transfer.
 
-    Destination targets are now ALWAYS a Pakistani phone number - the app
-    no longer accepts raw alphanumeric account codes or IBANs as a typed
-    target. The phone number is resolved against PostgreSQL
-    (users.phone -> account_number, name) elsewhere in the pipeline; this
-    function's only job is to recognize and normalize the phone number
-    itself. Delegates to extract_phone_number_pk().
+    A Slot extractor only ever sees raw text (no access to which
+    transfer_method was previously chosen), so this recognizes any of the
+    three formats the app supports and returns whichever matches:
+      - IBAN: 'PK' + 2 digits + 4-letter bank code + 16 digits = 24 total
+        (e.g. PK36SCBL0000001123456702).
+      - Raast ID: an 11-digit Pakistani mobile number (03XXXXXXXXX),
+        optionally with a +92/0092/92 country-code prefix.
+      - Account Number: 8-16 digits, numbers only.
+
+    run_flow_step() is the one that checks the result against the
+    transfer_method the user actually picked (see the special-case block
+    for 'transfer_identifier' below) - this function just recognizes shapes.
     """
-    return extract_phone_number_pk(text)
+    raw = text.strip()
+    if not raw:
+        return None
+
+    cleaned = re.sub(r'[\s-]', '', raw).upper()
+
+    # IBAN check.
+    if re.fullmatch(r'PK\d{2}[A-Z]{4}\d{16}', cleaned):
+        return cleaned
+
+    # Raast ID / phone number check (local or intl format).
+    phone = extract_phone_number_pk(cleaned)
+    if phone:
+        return phone
+
+    # Plain account number: digits only, 8-16 chars.
+    if re.fullmatch(r'\d{8,16}', cleaned):
+        return cleaned
+
+    return None
 
 
 def extract_phone_number_pk(text: str) -> Optional[str]:
@@ -2376,22 +2406,31 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
     # prompting.
     if (current_flow == 'transfer_money' and target_slot == 'transfer_identifier'
             and extracted is not None):
-        resolved = None
-        if _recipient_resolver is not None:
-            try:
-                resolved = _recipient_resolver(extracted)
-            except Exception:
-                resolved = None
 
-        if not resolved:
-            ai_response = RESPONSES['transfer_phone_not_found'][effective_language]
+        chosen_method = ctx.get('transfer_method')
+        is_phone = bool(re.fullmatch(r'0(3\d{9})', extracted))
+        is_iban  = bool(re.fullmatch(r'PK\d{2}[A-Z]{4}\d{16}', extracted))
+        is_acct  = bool(re.fullmatch(r'\d{8,16}', extracted)) and not is_phone
+
+        # Reject shapes that don't match the method the user actually
+        # picked (e.g. typing an IBAN after choosing "Raast ID") instead
+        # of silently accepting whatever format happens to parse.
+        method_matches = (
+            (chosen_method == 'Raast ID' and is_phone) or
+            (chosen_method == 'IBAN' and is_iban) or
+            (chosen_method == 'Account Number' and (is_acct or is_phone))
+        )
+
+        if not method_matches:
+            ai_response = RESPONSES['transfer_identifier_wrong_format'][effective_language]
+            ai_response = _format_with_ctx(ai_response, ctx)
             result = {
                 'intent': current_flow,
                 'language': effective_language,
                 'session_language': ctx.get('session_language', language),
                 'entities': {},
                 'needs_clarification': True,
-                'clarification_type': 'transfer_identifier_not_found',
+                'clarification_type': 'transfer_identifier_wrong_format',
                 'requires_human': False,
                 'handoff_reason': None,
                 'normalized_text': normalized,
@@ -2404,10 +2443,56 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
                     result[key] = ctx[key]
             return result
 
-        new_ctx = dict(ctx)
-        new_ctx['transfer_identifier'] = extracted
-        new_ctx['recipient'] = resolved['name']
-        new_ctx['account_number'] = resolved['account_number']
+        if chosen_method == 'Raast ID':
+            # Raast ID is Pakistan's real mobile-number-linked transfer
+            # rail, so (and only so) this path auto-resolves the phone
+            # number against PostgreSQL instead of asking for a name.
+            resolved = None
+            if _recipient_resolver is not None:
+                try:
+                    resolved = _recipient_resolver(extracted)
+                except Exception:
+                    resolved = None
+
+            if not resolved:
+                ai_response = RESPONSES['transfer_phone_not_found'][effective_language]
+                result = {
+                    'intent': current_flow,
+                    'language': effective_language,
+                    'session_language': ctx.get('session_language', language),
+                    'entities': {},
+                    'needs_clarification': True,
+                    'clarification_type': 'transfer_identifier_not_found',
+                    'requires_human': False,
+                    'handoff_reason': None,
+                    'normalized_text': normalized,
+                    'ai_response': ai_response,
+                    'current_flow': current_flow,
+                    'flow_state': FLOW_SLOT_STATE[(current_flow, target_slot)].name,
+                }
+                for key in slot_order:
+                    if key != target_slot and ctx.get(key):
+                        result[key] = ctx[key]
+                return result
+
+            new_ctx = dict(ctx)
+            new_ctx['transfer_identifier'] = extracted
+            new_ctx['recipient'] = resolved['name']
+            new_ctx['account_number'] = resolved['account_number']
+        else:
+            # IBAN / Account Number are treated as external-bank legs (same
+            # model as the manual transfer UI's execute_transfer 'bank'
+            # method): there's no FinBud account to auto-verify a name
+            # against here, so we accept the identifier as-is and label the
+            # recipient generically. The bank/1LINK leg (execute_transfer)
+            # is what actually validates and settles these.
+            new_ctx = dict(ctx)
+            new_ctx['transfer_identifier'] = extracted
+            new_ctx['recipient'] = (
+                f"Bank Account (…{extracted[-4:]})" if chosen_method == 'Account Number'
+                else f"IBAN Account (…{extracted[-4:]})"
+            )
+
         new_ctx['current_flow'] = current_flow
         # Also try to pull the amount out of the same message (e.g. "send
         # 03001234567 5000") instead of always asking for it separately.
