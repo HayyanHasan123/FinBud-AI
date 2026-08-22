@@ -60,7 +60,7 @@ from features import (
 # ── Savings Goals feature (self-contained blueprint) ───────────────────────
 from advisor_profile_routes import advisor_profile_bp, init_profile_tables
 from goals_routes import goals_bp, init_goals_tables
-from nlp_module import BankAIConversation, set_recipient_resolver
+from nlp_module import BankAIConversation, set_recipient_resolver, set_account_resolver
 
 # ── Optional: speech recognition ─────────────────────────────────────────────
 try:
@@ -196,11 +196,45 @@ def lookup_account_by_phone(phone: str):
             release_db(conn)
 
 
-# Wire the resolver into the NLP engine now that both `chatbot` and
-# `lookup_account_by_phone` exist. From this point on, transfer_money's
-# phone-number slot auto-resolves via PostgreSQL instead of ever asking
-# for a recipient name.
+def lookup_account_by_account_number(account_number: str):
+    """
+    Parameterized PostgreSQL lookup: dashboard_users.account_number ->
+    (account_number, name). Used when the user picks "Account Number" as
+    the transfer method.
+
+    Unlike lookup_account_by_phone(), returning None here is an entirely
+    normal outcome (it just means the number belongs to an external bank,
+    not a FinBud-AI account) - never raises, any DB error is also treated
+    as "not found" so the flow degrades gracefully to asking for a name.
+    """
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT account_number, name FROM dashboard_users WHERE account_number = %s",
+            (account_number,)
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        return {'account_number': row['account_number'], 'name': row['name']}
+    except Exception as e:
+        print(f"[lookup_account_by_account_number] error: {e}")
+        return None
+    finally:
+        if conn is not None:
+            release_db(conn)
+
+
+# Wire the resolvers into the NLP engine now that both `chatbot` and the
+# lookup functions exist. From this point on, transfer_money's identifier
+# slot auto-resolves via PostgreSQL instead of ever asking for a recipient
+# name - except when the identifier turns out to be a real external bank
+# IBAN/account number, in which case the flow falls back to asking for the
+# recipient's name directly (see nlp_module.handle_recipient_step).
 set_recipient_resolver(lookup_account_by_phone)
+set_account_resolver(lookup_account_by_account_number)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1210,7 +1244,7 @@ def chat_message():
                         'redemption_choice', 'account_number', 'flow_state',
                         'transfer_method', 'transfer_identifier', 'purpose',
                         'description', 'bill_category', 'service_provider',
-                        'provider_hint']:
+                        'provider_hint', '_awaiting_manual_recipient_name']:
                 if key in nlp_result:
                     context[key] = nlp_result[key]
             context['session_language'] = nlp_result.get('session_language')
@@ -3104,4 +3138,3 @@ def spending_by_category_detailed():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-
