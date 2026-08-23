@@ -66,7 +66,12 @@ FALLBACK_CATEGORIES = [
 
 def init_profile_tables(conn):
     """
-    Creates the advisor_profiles table if it doesn't exist.
+    Creates the advisor_profiles table if it doesn't exist, and adds the
+    Investing Guide columns (risk_horizon, investing_goal, monthly_amount,
+    investing_updated_at) if they aren't there yet — ADD COLUMN IF NOT
+    EXISTS makes this safe to run on every startup against an existing
+    table with existing rows, same idempotent pattern used elsewhere in
+    this codebase (e.g. admin_tables.py).
 
     Takes an already-open connection (called as
     init_profile_tables(get_pg_conn()) from app.py) and releases it back
@@ -80,6 +85,96 @@ def init_profile_tables(conn):
         risk_preference  TEXT NOT NULL,
         created_at       TEXT NOT NULL
     )''')
+    # Investing Guide (5-question deterministic engine) columns — added
+    # alongside the existing risk check-in columns above, on the same
+    # table/row per account, since both describe the same user's advisor
+    # profile. NULL until the user completes the Investing Guide quiz.
+    c.execute('ALTER TABLE advisor_profiles ADD COLUMN IF NOT EXISTS risk_horizon TEXT')
+    c.execute('ALTER TABLE advisor_profiles ADD COLUMN IF NOT EXISTS investing_goal TEXT')
+    c.execute('ALTER TABLE advisor_profiles ADD COLUMN IF NOT EXISTS monthly_amount TEXT')
+    c.execute('ALTER TABLE advisor_profiles ADD COLUMN IF NOT EXISTS investing_updated_at TEXT')
+    conn.commit()
+    release_pg_conn(conn)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Investing Guide profile helpers
+# ─────────────────────────────────────────────────────────────────────────────
+# Owned here (advisor_profile_routes.py owns the advisor_profiles table),
+# imported and reused by investing_guide_routes.py — same
+# ownership/reuse pattern as get_income_vs_expense() from features.py.
+# Column values are always one of investing_scenarios_data.VALID_VALUES'
+# short codes (e.g. 'never', 'safe', 'lt1', 'emergency', 'lt5k'), validated
+# by the caller before these are ever invoked.
+
+def get_investing_profile(account_number: str):
+    """
+    Returns the saved 5-answer Investing Guide profile for this account, or
+    None if the user hasn't completed the quiz yet (any of the 5 investing
+    columns is NULL — experience_level/risk_preference alone, from the
+    older risk check-in feature, don't count as a completed quiz).
+    """
+    conn = get_pg_conn(); c = conn.cursor()
+    c.execute("""
+        SELECT experience_level, risk_preference, risk_horizon,
+               investing_goal, monthly_amount, investing_updated_at
+        FROM advisor_profiles
+        WHERE account_number=%s
+    """, (account_number,))
+    row = c.fetchone()
+    release_pg_conn(conn)
+
+    if not row or not row.get('risk_horizon') or not row.get('investing_goal') or not row.get('monthly_amount'):
+        return None
+
+    return {
+        'experience': row['experience_level'],
+        'risk': row['risk_preference'],
+        'horizon': row['risk_horizon'],
+        'goal': row['investing_goal'],
+        'amount': row['monthly_amount'],
+        'updated_at': row['investing_updated_at'],
+    }
+
+
+def save_investing_profile(account_number: str, experience: str, risk: str,
+                            horizon: str, goal: str, amount: str):
+    """
+    Upserts the 5-answer Investing Guide profile for this account. Reuses
+    the same advisor_profiles row as the risk check-in feature — the two
+    legacy columns (experience_level, risk_preference) are kept in sync
+    with the quiz's experience/risk answers so the older
+    /api/advisor/investing/suggestion endpoint keeps working unmodified.
+    """
+    now_iso = datetime.utcnow().isoformat()
+    conn = get_pg_conn(); c = conn.cursor()
+    c.execute("""
+        INSERT INTO advisor_profiles
+            (account_number, experience_level, risk_preference,
+             risk_horizon, investing_goal, monthly_amount,
+             investing_updated_at, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (account_number) DO UPDATE SET
+            experience_level     = EXCLUDED.experience_level,
+            risk_preference      = EXCLUDED.risk_preference,
+            risk_horizon         = EXCLUDED.risk_horizon,
+            investing_goal       = EXCLUDED.investing_goal,
+            monthly_amount       = EXCLUDED.monthly_amount,
+            investing_updated_at = EXCLUDED.investing_updated_at
+    """, (account_number, experience, risk, horizon, goal, amount, now_iso, now_iso))
+    conn.commit()
+    release_pg_conn(conn)
+
+
+def clear_investing_profile(account_number: str):
+    """Used by 'Retake Assessment' — clears the 5 investing answers only."""
+    conn = get_pg_conn(); c = conn.cursor()
+    c.execute("""
+        UPDATE advisor_profiles
+        SET risk_horizon = NULL, investing_goal = NULL, monthly_amount = NULL,
+            investing_updated_at = NULL
+        WHERE account_number=%s
+    """, (account_number,))
     conn.commit()
     release_pg_conn(conn)
 
