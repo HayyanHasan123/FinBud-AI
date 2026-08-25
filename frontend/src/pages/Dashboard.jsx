@@ -99,6 +99,69 @@ function getTransactionDisplayLabel(tx) {
   return tx?.description || ''
 }
 
+// Per-provider icon + color so the Pay Bill picker shows a distinct visual
+// for each biller instead of one generic icon repeated for every row.
+// Matched case-insensitively against whatever name the backend returns for
+// /api/bills/providers, so it degrades gracefully to a category default
+// (still colored, just not brand-specific) for any provider not listed here.
+const BILLER_VISUALS = {
+  // Electricity DISCOs
+  'k-electric':  { icon: 'fa-bolt',   color: '#D71920' },
+  'kelectric':   { icon: 'fa-bolt',   color: '#D71920' },
+  'lesco':       { icon: 'fa-bolt',   color: '#00923F' },
+  'pesco':       { icon: 'fa-bolt',   color: '#F7941D' },
+  'hesco':       { icon: 'fa-bolt',   color: '#0072BC' },
+  'mepco':       { icon: 'fa-bolt',   color: '#8DC63F' },
+  'gepco':       { icon: 'fa-bolt',   color: '#662D91' },
+  'sepco':       { icon: 'fa-bolt',   color: '#00AEEF' },
+  'qesco':       { icon: 'fa-bolt',   color: '#ED1C24' },
+  'iesco':       { icon: 'fa-bolt',   color: '#F15A29' },
+  'fesco':       { icon: 'fa-bolt',   color: '#0089CF' },
+  'tesco':       { icon: 'fa-bolt',   color: '#39B54A' },
+  // Gas
+  'ssgc':        { icon: 'fa-fire',   color: '#F7941D' },
+  'sui southern gas company': { icon: 'fa-fire', color: '#F7941D' },
+  'sngpl':       { icon: 'fa-fire',   color: '#00A651' },
+  'sui northern gas pipelines limited': { icon: 'fa-fire', color: '#00A651' },
+  // Internet / landline
+  'ptcl':        { icon: 'fa-wifi',   color: '#004990' },
+  'nayatel':     { icon: 'fa-wifi',   color: '#F15A29' },
+  'stormfiber':  { icon: 'fa-wifi',   color: '#00AEEF' },
+  'storm fiber': { icon: 'fa-wifi',   color: '#00AEEF' },
+  'wateen':      { icon: 'fa-wifi',   color: '#662D91' },
+  // Mobile network operators
+  'jazz':        { icon: 'fa-signal', color: '#F68B1F' },
+  'zong':        { icon: 'fa-signal', color: '#66C430' },
+  'ufone':       { icon: 'fa-signal', color: '#00954F' },
+  'telenor':     { icon: 'fa-signal', color: '#0066B3' },
+}
+
+// Category-level fallback (still gives each PayBillStep1 tile its own tone).
+const CATEGORY_VISUALS = {
+  electricity: { icon: 'fa-bolt', color: '#F7941D' },
+  gas:         { icon: 'fa-fire', color: '#EF5350' },
+  internet:    { icon: 'fa-wifi', color: '#0072BC' },
+}
+
+function getBillerVisual(providerName, category) {
+  const key = (providerName || '').trim().toLowerCase()
+  if (BILLER_VISUALS[key]) return BILLER_VISUALS[key]
+  // Loose match: catches variants like "K-Electric (KE)" or "LESCO Lahore"
+  const found = Object.keys(BILLER_VISUALS).find(k => key.includes(k))
+  if (found) return BILLER_VISUALS[found]
+  return CATEGORY_VISUALS[category] || { icon: 'fa-building', color: null }
+}
+
+
+// activity notification — useful in the receipt/print context, but repeated
+// on every single line in the notification feed it's just noise that pushes
+// short messages onto 2-3 lines. Strip it for display in the dropdown only;
+// the raw message (with balance) is still what gets toasted/logged elsewhere.
+function getActivitySummary(message) {
+  if (!message) return ''
+  return message.replace(/\s*Remaining balance:\s*PKR\s*[\d,.]+\.?\s*$/i, '').trim()
+}
+
 // ── TRANSLATIONS (English / Urdu / Roman Urdu) ────────────────────────
 // Covers the primary user-facing surfaces: navigation, Home, Analytics,
 // Wallet, and the core action modals (Send Money, Pay Bill, Rewards,
@@ -142,6 +205,10 @@ const TRANSLATIONS = {
   tx_amount: { en: 'Amount', ur: 'رقم', roman: 'Raqam' },
   tx_empty: { en: 'No transactions yet', ur: 'ابھی تک کوئی لین دین نہیں', roman: 'Abhi Tak Koi Transaction Nahi' },
   tx_download_receipt: { en: 'Download Receipt', ur: 'رسید ڈاؤن لوڈ کریں', roman: 'Receipt Download Karein' },
+  tx_download_history: { en: 'Download History', ur: 'ہسٹری ڈاؤن لوڈ کریں', roman: 'History Download Karein' },
+  tx_download_history_note: { en: 'Choose a date range to download your transaction history as a PDF.', ur: 'اپنی لین دین کی ہسٹری پی ڈی ایف کے طور پر ڈاؤن لوڈ کرنے کے لیے تاریخوں کی حد منتخب کریں۔', roman: 'Apni transaction history PDF ke tor par download karne ke liye date range chunein.' },
+  tx_start_date: { en: 'Start Date', ur: 'شروع کی تاریخ', roman: 'Shuru Ki Tareekh' },
+  tx_end_date: { en: 'End Date', ur: 'آخری تاریخ', roman: 'Aakhri Tareekh' },
   bell_bill_reminders: { en: 'Bill Reminders', ur: 'بل کی یاد دہانی', roman: 'Bill Reminders' },
   bell_no_bills: { en: 'No bills due', ur: 'کوئی بل واجب الادا نہیں', roman: 'Koi Bill Due Nahi' },
   bell_activity: { en: 'Transaction Activity', ur: 'لین دین کی سرگرمی', roman: 'Transaction Activity' },
@@ -595,6 +662,10 @@ export default function Dashboard() {
             const bKey = Number(by) * 12 + (MONTH_INDEX[bm] ?? 0)
             return aKey - bKey
           })
+          // Keep only the most recent 5 months (chronological sort above
+          // means "most recent" is the tail of the array), rather than
+          // whatever slice of months the backend happened to send first.
+          monthlyTrend = monthlyTrend.slice(-5)
           trendAvailable = true
         }
       } catch {}
@@ -699,24 +770,21 @@ export default function Dashboard() {
     } catch { setModal({ type: 'alert', title: 'Error', message: 'Could not fetch receipt.', color: 'var(--danger)' }) }
   }
 
-  function downloadTransactionsList() {
-    if (!transactions || transactions.length === 0) return
-    const header = ['Date', 'Type', 'Amount']
-    const rows = transactions.map(tx => [
-      tx.date,
-      getTransactionDisplayLabel(tx),
-      `${tx.amount < 0 ? '-' : ''}PKR ${Math.abs(tx.amount).toLocaleString('en-PK')}`
-    ])
-    const csv = [header, ...rows].map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `finbud-transactions-${new Date().toISOString().slice(0, 10)}.csv`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+  function printTransactionHistory(startDate, endDate) {
+    const inRange = transactions.filter(tx => tx.date >= startDate && tx.date <= endDate)
+    if (!printRef.current) return
+    const rowsHtml = inRange.length === 0
+      ? `<div class="r-row"><span>No transactions in this range</span></div>`
+      : inRange.map(tx => `
+          <div class="r-row">
+            <span>${tx.date} — ${getTransactionDisplayLabel(tx)}</span>
+            <strong style="color:${tx.amount < 0 ? '#c0392b' : '#1b8a4c'}">${tx.amount < 0 ? '-' : ''}PKR ${Math.abs(tx.amount).toLocaleString('en-PK')}</strong>
+          </div>`).join('')
+    printRef.current.innerHTML = `
+      <div class="r-header"><h2>FinBud AI — Transaction History</h2><p>${startDate} to ${endDate}</p></div>
+      ${rowsHtml}
+    `
+    setTimeout(() => window.print(), 300)
   }
 
   function renderPrint(receipt) {
@@ -907,7 +975,6 @@ export default function Dashboard() {
           <button type="submit" className="modal-btn-primary">{t('btn_continue')}</button>
           <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'sendMoney2' })}>{t('btn_back')}</button>
         </form>
-        <div className="limit-note">Remaining today: <strong>PKR {usage.remaining.toLocaleString('en-PK')}</strong> of PKR {DAILY_TRANSFER_LIMIT.toLocaleString('en-PK')} daily limit</div>
       </div>
     )
   }
@@ -1050,9 +1117,9 @@ export default function Dashboard() {
   // about (see /api/bills/providers in app.py).
   function PayBillStep1() {
     const categories = [
-      { key: 'electricity', icon: 'fa-bolt', label: 'Electricity' },
-      { key: 'gas', icon: 'fa-fire', label: 'Gas' },
-      { key: 'internet', icon: 'fa-wifi', label: 'Internet' },
+      { key: 'electricity', icon: CATEGORY_VISUALS.electricity.icon, color: CATEGORY_VISUALS.electricity.color, label: 'Electricity' },
+      { key: 'gas', icon: CATEGORY_VISUALS.gas.icon, color: CATEGORY_VISUALS.gas.color, label: 'Gas' },
+      { key: 'internet', icon: CATEGORY_VISUALS.internet.icon, color: CATEGORY_VISUALS.internet.color, label: 'Internet' },
     ]
     function choose(cat) {
       setPendingBill({ category: cat })
@@ -1107,7 +1174,10 @@ export default function Dashboard() {
           <p style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</p>
         ) : (
           <OptionGrid variant="list" selected={pendingBill?.biller} onSelect={choose}
-            options={providers.map(p => ({ key: p, icon: 'fa-building', label: p }))} />
+            options={providers.map(p => {
+              const v = getBillerVisual(p, pendingBill?.category)
+              return { key: p, icon: v.icon, color: v.color, label: p }
+            })} />
         )}
         <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill1' })}>{t('btn_back')}</button>
       </div>
@@ -1385,6 +1455,37 @@ export default function Dashboard() {
           </div>
         ))}
         <button className="modal-btn-secondary" onClick={() => setModal({ type: 'redeemPoints' })}>{t('btn_back')}</button>
+      </div>
+    )
+  }
+
+  function DownloadHistory() {
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const [startDate, setStartDate] = useState('')
+    const [endDate, setEndDate] = useState(todayStr)
+    const [error, setError] = useState('')
+
+    function handleSubmit(e) {
+      e.preventDefault()
+      if (!startDate || !endDate) { setError('Please select both a start and end date.'); return }
+      if (startDate > endDate) { setError('Start date must be before the end date.'); return }
+      setError('')
+      printTransactionHistory(startDate, endDate)
+      setModal(null)
+    }
+
+    return (
+      <div>
+        <h3>{t('tx_download_history')}</h3>
+        <p style={{ fontSize: 12, color: '#777' }}>{t('tx_download_history_note')}</p>
+        <form onSubmit={handleSubmit}>
+          <label>{t('tx_start_date')}</label>
+          <input type="date" required max={todayStr} value={startDate} onChange={e => setStartDate(e.target.value)} />
+          <label style={{ marginTop: 10 }}>{t('tx_end_date')}</label>
+          <input type="date" required max={todayStr} value={endDate} onChange={e => setEndDate(e.target.value)} />
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
+          <button type="submit" className="modal-btn-primary">{t('btn_download_pdf')}</button>
+        </form>
       </div>
     )
   }
@@ -1730,7 +1831,7 @@ export default function Dashboard() {
               onClick={() => onSelect(opt.key)}
               onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(opt.key) }}
             >
-              <div className="option-list-icon">
+              <div className="option-list-icon" style={opt.color ? { background: opt.color } : undefined}>
                 {opt.icon.startsWith('fa-') ? <i className={`fas ${opt.icon}`} /> : opt.icon}
               </div>
               <div className="option-list-label">{opt.label}</div>
@@ -1751,7 +1852,7 @@ export default function Dashboard() {
             onClick={() => onSelect(opt.key)}
             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(opt.key) }}
           >
-            <div className="option-card-icon">
+            <div className="option-card-icon" style={opt.color ? { background: opt.color } : undefined}>
               {opt.icon.startsWith('fa-') ? <i className={`fas ${opt.icon}`} /> : opt.icon}
             </div>
             <div className="option-card-label">{opt.label}</div>
@@ -1794,6 +1895,7 @@ export default function Dashboard() {
       case 'redeemPoints': return <RewardsRedeem message={modal.message} messageType={modal.messageType} />
       case 'productSelect': return <ProductSelect />
       case 'topup':      return <TopUp />
+      case 'downloadHistory': return <DownloadHistory />
       case 'logIncome':  return <LogIncome />
       case 'addCard':    return <AddCard />
       case 'linkBank':   return <LinkBankAccount />
@@ -1969,8 +2071,11 @@ export default function Dashboard() {
         .bell-container i { font-size:22px; color:var(--primary-purple); }
         .activity-badge { background:var(--income); }
         .activity-dropdown { right:100px; }
-        .activity-item { border-left-color:var(--primary-purple); background:rgba(92,45,145,0.06); }
-        .activity-item.activity-unread { border-left-color:var(--income); background:rgba(16,185,129,0.08); font-weight:600; }
+        .activity-item { border-left-color:var(--primary-purple); background:rgba(92,45,145,0.06); padding:10px 14px; margin-bottom:8px; text-align:left; }
+        .activity-item.activity-unread { border-left-color:var(--income); background:rgba(16,185,129,0.08); }
+        .activity-msg { font-size:13px; line-height:1.4; color:var(--text-dark); text-align:left; }
+        .activity-item.activity-unread .activity-msg { font-weight:700; }
+        .activity-time { font-size:10.5px; color:#8a8a8a; margin-top:3px; text-align:left; }
 
         /* Toast notification (transaction confirmations) */
         .toast-notification {
@@ -1989,8 +2094,9 @@ export default function Dashboard() {
         }
         .reminder-badge { position:absolute; top:5px; right:5px; background:var(--danger); color:#fff; border-radius:50%; width:18px; height:18px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
         .reminders-dropdown { position:absolute; top:60px; right:40px; width:350px; max-height:400px; overflow-y:auto; background:var(--card); border-radius:12px; box-shadow:0 8px 20px rgba(0,0,0,0.15); z-index:1000; padding:20px; }
+        .dropdown-backdrop { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.15); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); z-index:500; }
         .reminders-dropdown h3 { color:var(--primary-purple); font-weight:700; margin:0 0 15px; font-size:18px; }
-        .reminder-item { padding:12px; margin-bottom:10px; border-radius:8px; border-left:4px solid var(--warning); background:rgba(245,158,11,0.1); font-size:14px; }
+        .reminder-item { padding:12px; margin-bottom:10px; border-radius:8px; border-left:4px solid var(--warning); background:rgba(245,158,11,0.1); font-size:14px; text-align:left; }
         .reminder-item.due-today { border-left-color:var(--expense); background:rgba(239,68,68,0.1); }
         .reminder-item.overdue { border-left-color:var(--danger); background:rgba(185,28,28,0.1); }
         .profile-area { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--primary-purple); cursor:pointer; }
@@ -2008,6 +2114,8 @@ export default function Dashboard() {
         .sign-up-btn { background:#fff; color:var(--primary-purple); border:2px solid var(--primary-purple); padding:8px 20px; border-radius:8px; cursor:pointer; font-weight:700; text-transform:uppercase; margin-left:auto; }
         .topup-btn { background:var(--primary-purple); color:#fff; border:none; padding:8px 18px; border-radius:8px; cursor:pointer; font-weight:700; text-transform:uppercase; font-size:13px; }
         .quick-actions-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+        .quick-actions-grid .action-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
+        .quick-actions-grid .action-btn i { font-size:24px; }
         .action-btn { background:var(--primary-purple); color:#fff; padding:30px 20px; border:none; border-radius:12px; cursor:pointer; font-weight:600; font-size:16px; text-transform:uppercase; text-align:center; transition:transform 0.15s, box-shadow 0.15s; }
         .action-btn:hover { transform:translateY(-3px); box-shadow:0 5px 15px rgba(0,0,0,0.2); }
         .action-btn.full-width { grid-column:1/-1; }
@@ -2030,7 +2138,9 @@ export default function Dashboard() {
         .expense-text { color:var(--expense); }
         .breakdown-card { background:var(--card); padding:20px 30px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,0.05); }
         .breakdown-row { margin-bottom:14px; }
-        .breakdown-label-row { display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; }
+        .breakdown-label-row { display:flex; justify-content:space-between; gap:8px; font-size:13px; margin-bottom:6px; }
+        .breakdown-label-row > span:first-child { min-width:0; overflow-wrap:break-word; word-break:break-word; }
+        .breakdown-label-row > strong { flex-shrink:0; }
         .breakdown-bar-track { width:100%; height:8px; background:var(--secondary-purple); border-radius:4px; overflow:hidden; }
         .breakdown-bar-fill { height:100%; background:var(--primary-purple); border-radius:4px; transition:width 0.4s; }
         .income-bar-fill { background:var(--income); }
@@ -2039,7 +2149,9 @@ export default function Dashboard() {
         .advisor-title { font-size:26px; font-weight:700; color:var(--primary-purple); margin:0 0 6px; }
         .advisor-subtitle { font-size:14px; color:#6b7280; margin:0; }
         .advisor-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+        .advisor-grid .card { min-width:0; }
         .grow-money-grid { display:grid; grid-template-columns:1fr; gap:20px; }
+        .grow-money-header { justify-content:center; text-align:center; }
         .advisor-summary-card { grid-column:1/-1; }
         .advisor-summary-row { display:flex; gap:30px; flex-wrap:wrap; margin-top:10px; }
         .advisor-stat { display:flex; flex-direction:column; gap:6px; }
@@ -2065,6 +2177,11 @@ export default function Dashboard() {
         .credit-score-row { display:flex; align-items:center; gap:20px; flex-wrap:wrap; margin-bottom:16px; }
         .credit-score-value { font-size:48px; font-weight:800; line-height:1; }
         .credit-score-pill { display:inline-block; padding:4px 14px; border-radius:20px; color:#fff; font-size:12px; font-weight:700; text-transform:uppercase; }
+        /* Flex children default to min-width:auto, which stops them shrinking
+           below their content's natural width — the advice text would rather
+           push the row past the screen edge than wrap. min-width:0 lets it
+           shrink and wrap like normal text. */
+        .credit-score-row > div { min-width:0; }
         .credit-breakdown-list { padding-top:14px; border-top:1px solid var(--secondary-purple); }
         .credit-breakdown-row { display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--secondary-purple); }
         .credit-breakdown-row:last-child { border-bottom:none; }
@@ -2074,13 +2191,21 @@ export default function Dashboard() {
         .anomaly-item { display:flex; gap:12px; align-items:flex-start; padding:12px; margin-bottom:10px; border-radius:8px; border-left:4px solid var(--secondary-purple); background:var(--secondary-purple); }
         .anomaly-item:last-child { margin-bottom:0; }
         .anomaly-icon { font-size:18px; flex-shrink:0; }
+        /* Same min-width:0 fix as the credit score row above — without it the
+           anomaly message refuses to wrap and overflows the card sideways
+           instead of shrinking to fit. */
+        .anomaly-item > div { min-width:0; flex:1; overflow-wrap:break-word; word-break:break-word; }
         .anomaly-item.anomaly-info { border-left-color:var(--primary-purple); background:rgba(92,45,145,0.06); }
         .anomaly-item.anomaly-warning { border-left-color:var(--warning); background:rgba(245,158,11,0.1); }
         .anomaly-item.anomaly-danger { border-left-color:var(--danger); background:rgba(185,28,28,0.08); }
 
         .wallet-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-        .wallet-row { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid var(--secondary-purple); }
+        .wallet-row { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid var(--secondary-purple); gap:12px; }
         .wallet-row:last-child { border-bottom:none; }
+        /* Description column shrinks/wraps; the PKR amount on the right
+           keeps its natural width instead of getting squeezed. */
+        .wallet-row > div:first-child { min-width:0; flex:1; overflow-wrap:break-word; word-break:break-word; }
+        .wallet-row > span { flex-shrink:0; }
         .wallet-status-pill { font-size:11px; font-weight:700; text-transform:uppercase; padding:4px 10px; border-radius:20px; background:rgba(16,185,129,0.12); color:var(--income); }
         .wallet-status-pill.locked { background:rgba(185,28,28,0.12); color:var(--danger); }
         .pace-compare-row { display:flex; gap:20px; margin-bottom:18px; flex-wrap:wrap; }
@@ -2262,6 +2387,7 @@ export default function Dashboard() {
           .transactions-card{max-width:100%;}
           .advisor-wrap{padding:20px;}
           .advisor-grid{grid-template-columns:1fr;}
+          .goals-list{grid-template-columns:1fr;}
         }
 
         /* ── Grow My Money (check-in, savings goals, investing) ── */
@@ -2273,7 +2399,7 @@ export default function Dashboard() {
         .checkin-option-btn:disabled { opacity:0.6; cursor:default; }
         .checkin-back-btn { margin-top:14px; background:none; border:none; color:#6b7280; font-size:13px; font-weight:600; cursor:pointer; padding:6px 0; }
 
-        .goals-list { display:flex; flex-direction:column; gap:14px; margin-bottom:18px; }
+        .goals-list { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; margin-bottom:18px; }
         .goal-item { background:var(--secondary-purple); border-radius:10px; padding:14px 16px; }
         .goal-item-header { display:flex; justify-content:space-between; align-items:center; font-weight:700; color:var(--primary-purple); font-size:14px; margin-bottom:8px; }
         .goal-remove-btn { background:none; border:none; color:#9ca3af; font-size:18px; line-height:1; cursor:pointer; padding:2px 6px; }
@@ -2421,12 +2547,36 @@ export default function Dashboard() {
            .advisor-grid — collapse to one column with phone-sized padding */
         .mobile-main .advisor-wrap { padding:0; max-width:none; }
         .mobile-main .advisor-grid { grid-template-columns:1fr; gap:10px; }
+        /* Grid items default to min-width:auto, which lets a card refuse to
+           shrink below the intrinsic width of its content and push past the
+           screen edge (the "half the card is cut off" bug). min-width:0 +
+           width:100% forces every card to obey the single 1fr track instead. */
+        .mobile-main .advisor-grid .card { min-width:0; width:100%; box-sizing:border-box; }
         .mobile-main .advisor-grid .card:not(.advisor-summary-card) { padding:14px 12px; }
-        .mobile-main .advisor-grid .card h3 { font-size:14px; }
+        .mobile-main .advisor-grid .card h3 { font-size:14px; text-align:left; }
         .mobile-main .advisor-grid .advisor-stat-value { font-size:18px; }
         .mobile-main .advisor-grid .advisor-stat-label { font-size:11px; }
+
+        /* Anomaly Alerts — smaller, tighter cards that fit the phone width
+           instead of the desktop-sized padding/icons/text. */
+        .mobile-main .anomaly-item { padding:10px; gap:8px; margin-bottom:8px; text-align:left; }
+        .mobile-main .anomaly-icon { font-size:14px; }
+        .mobile-main .anomaly-icon svg { width:14px; height:14px; }
+        .mobile-main .anomaly-item strong { font-size:12.5px; }
+        .mobile-main .anomaly-item p { font-size:11.5px; line-height:1.4; }
+
+        /* Subscriptions (and any other wallet-row list) — compact rows with
+           the description left-aligned and the amount right-aligned, sized
+           to actually fit on a phone instead of desktop-sized type. */
+        .mobile-main .wallet-row { padding:10px 0; gap:8px; }
+        .mobile-main .wallet-row > div:first-child { text-align:left; }
+        .mobile-main .wallet-row > div:first-child strong { font-size:13px; }
+        .mobile-main .wallet-row > div:first-child > div { font-size:10.5px; }
+        .mobile-main .wallet-row > span { font-size:13px; font-weight:700; text-align:right; white-space:nowrap; }
         .mobile-main .grow-money-grid { grid-template-columns:1fr; gap:14px; }
+        .mobile-main .goals-list { grid-template-columns:1fr; }
         .mobile-main .advisor-header { flex-direction:column; align-items:stretch; gap:10px; }
+        .mobile-main .grow-money-header { justify-content:flex-start; text-align:left; }
         .mobile-main .advisor-header .topup-btn { align-self:flex-start; }
         .mobile-main .card { padding:18px 16px; border-radius:14px; }
         .mobile-main .pace-compare-row { flex-direction:column; gap:10px; }
@@ -2579,6 +2729,18 @@ export default function Dashboard() {
             <header className="topbar">
               <h1 className="topbar-title">{activeView === 'home' ? 'Dashboard' : activeView === 'advisor' ? 'Your Analytics' : activeView === 'growmymoney' ? 'Financial Advisor' : 'Wallet'}</h1>
               <div className="topbar-right">
+                <div className="lang-switcher">
+                  <button type="button" className="lang-switcher-btn" aria-label={t('language')} onClick={() => setLangMenuOpen(o => !o)}>
+                    <i className="fas fa-globe" /> {{ en: 'EN', ur: 'اردو', roman: 'Roman' }[language]}
+                  </button>
+                  {langMenuOpen && (
+                    <div className="lang-switcher-menu" onClick={e => e.stopPropagation()}>
+                      <button type="button" className={language === 'en' ? 'active' : ''} onClick={() => { setLanguage('en'); setLangMenuOpen(false) }}>English</button>
+                      <button type="button" className={language === 'ur' ? 'active' : ''} onClick={() => { setLanguage('ur'); setLangMenuOpen(false) }}>اردو</button>
+                      <button type="button" className={language === 'roman' ? 'active' : ''} onClick={() => { setLanguage('roman'); setLangMenuOpen(false) }}>Roman Urdu</button>
+                    </div>
+                  )}
+                </div>
                 <div className="bell-container" role="button" tabIndex={0} aria-label={`${notifUnreadCount} unread notifications`} onClick={openNotifications}>
                   <i className="fas fa-receipt" />
                   {notifUnreadCount > 0 && <span className="reminder-badge activity-badge">{notifUnreadCount}</span>}
@@ -2594,6 +2756,10 @@ export default function Dashboard() {
               </div>
             </header>
 
+            {(txNotifOpen || remindersOpen) && (
+              <div className="dropdown-backdrop" onClick={() => { setTxNotifOpen(false); setRemindersOpen(false) }} />
+            )}
+
             {txNotifOpen && (
               <div className="reminders-dropdown activity-dropdown" onClick={e => e.stopPropagation()}>
                 <h3><i className="fas fa-receipt" /> {t('bell_activity')}</h3>
@@ -2601,8 +2767,8 @@ export default function Dashboard() {
                   ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>{t('bell_no_activity')}</p>
                   : notifications.map(n => (
                     <div key={n.id} className={`reminder-item activity-item ${n.is_read ? '' : 'activity-unread'}`}>
-                      <div style={{ fontSize: 13.5 }}>{n.message}</div>
-                      <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>{new Date(n.created_at).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+                      <div className="activity-msg">{getActivitySummary(n.message)}</div>
+                      <div className="activity-time">{new Date(n.created_at).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
                     </div>
                   ))}
               </div>
@@ -2641,18 +2807,23 @@ export default function Dashboard() {
                     <div className="balance-row">
                       <span className="currency">PKR</span>
                       <strong className="balance-value">{userData.isMasked ? '*****' : formattedBalance}</strong>
-                      <button className="sign-up-btn" onClick={() => setUserData(u => ({ ...u, isMasked: !u.isMasked }))}>
-                        {userData.isMasked ? t('home_show_balance') : t('home_hide_balance')}
+                      <button
+                        className="balance-eye-btn"
+                        aria-label={userData.isMasked ? t('home_show_balance') : t('home_hide_balance')}
+                        title={userData.isMasked ? t('home_show_balance') : t('home_hide_balance')}
+                        onClick={() => setUserData(u => ({ ...u, isMasked: !u.isMasked }))}
+                      >
+                        <i className={`fas ${userData.isMasked ? 'fa-eye' : 'fa-eye-slash'}`} />
                       </button>
                       <button className="topup-btn" onClick={() => setModal({ type: 'topup' })}>{t('home_topup')}</button>
                     </div>
                   </div>
 
                   <div className="quick-actions-grid">
-                    <button className="action-btn" onClick={() => { setPendingTransfer(null); setModal({ type: 'sendMoney1' }) }}>{t('action_send_money')}</button>
-                    <button className="action-btn" onClick={() => { setPendingBill(null); setModal({ type: 'payBill1' }) }}>{t('action_pay_bill')}</button>
-                    <button className="action-btn" onClick={() => setModal({ type: 'rewards' })}>{t('action_rewards')}</button>
-                    <button className="action-btn" onClick={() => setModal({ type: 'redeemPoints' })}>{t('action_redeem_points')}</button>
+                    <button className="action-btn" onClick={() => { setPendingTransfer(null); setModal({ type: 'sendMoney1' }) }}><i className="fas fa-paper-plane" /><span>{t('action_send_money')}</span></button>
+                    <button className="action-btn" onClick={() => { setPendingBill(null); setModal({ type: 'payBill1' }) }}><i className="fas fa-file-invoice-dollar" /><span>{t('action_pay_bill')}</span></button>
+                    <button className="action-btn" onClick={() => setModal({ type: 'rewards' })}><i className="fas fa-gift" /><span>{t('action_rewards')}</span></button>
+                    <button className="action-btn" onClick={() => setModal({ type: 'redeemPoints' })}><i className="fas fa-coins" /><span>{t('action_redeem_points')}</span></button>
                   </div>
                 </section>
 
@@ -2665,7 +2836,7 @@ export default function Dashboard() {
                   <div className="transactions-card">
                     <div className="tx-card-header">
                       <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 18, marginLeft: 5 }} /></h3>
-                      <button className="tx-download-btn" aria-label={t('tx_download_receipt')} title={t('tx_download_receipt')} onClick={downloadTransactionsList}>
+                      <button className="tx-download-btn" aria-label={t('tx_download_history')} title={t('tx_download_history')} onClick={() => setModal({ type: 'downloadHistory' })}>
                         <i className="fas fa-download" />
                       </button>
                     </div>
@@ -2760,6 +2931,10 @@ export default function Dashboard() {
           </div>
         </header>
 
+        {(txNotifOpen || remindersOpen) && (
+          <div className="dropdown-backdrop" onClick={() => { setTxNotifOpen(false); setRemindersOpen(false) }} />
+        )}
+
         {txNotifOpen && (
           <div className="reminders-dropdown activity-dropdown" onClick={e => e.stopPropagation()}>
             <h3><i className="fas fa-receipt" /> {t('bell_activity')}</h3>
@@ -2767,8 +2942,8 @@ export default function Dashboard() {
               ? <p style={{ fontSize: 13, color: '#999', textAlign: 'center', padding: '10px 0' }}>{t('bell_no_activity')}</p>
               : notifications.map(n => (
                 <div key={n.id} className={`reminder-item activity-item ${n.is_read ? '' : 'activity-unread'}`}>
-                  <div style={{ fontSize: 13.5 }}>{n.message}</div>
-                  <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>{new Date(n.created_at).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+                  <div className="activity-msg">{getActivitySummary(n.message)}</div>
+                  <div className="activity-time">{new Date(n.created_at).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
                 </div>
               ))}
           </div>
@@ -2827,7 +3002,7 @@ export default function Dashboard() {
               <div className="transactions-card mobile-transactions-card">
                 <div className="tx-card-header">
                   <h3>{t('tx_recent')} <i className="fas fa-chevron-down" style={{ fontSize: 16, marginLeft: 5 }} /></h3>
-                  <button className="tx-download-btn" aria-label={t('tx_download_receipt')} title={t('tx_download_receipt')} onClick={downloadTransactionsList}>
+                  <button className="tx-download-btn" aria-label={t('tx_download_history')} title={t('tx_download_history')} onClick={() => setModal({ type: 'downloadHistory' })}>
                     <i className="fas fa-download" />
                   </button>
                 </div>

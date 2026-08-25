@@ -563,11 +563,7 @@ export default function SavingsGoalsPanel() {
         }
       `}</style>
 
-      {suggested > 0 && (
-        <p className="advisor-footnote" style={{ marginBottom: 16 }}>
-          Based on your income and expenses, saving about <strong>{fmt(suggested)}/month</strong> looks realistic for you right now.
-        </p>
-      )}
+      <h3 style={{ marginTop: 0, marginBottom: 16 }}>Savings</h3>
 
       {actionMessage && <p className="advisor-footnote" style={{ color: 'var(--primary-purple)', marginBottom: 12 }}>{actionMessage}</p>}
 
