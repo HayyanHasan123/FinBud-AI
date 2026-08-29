@@ -110,7 +110,7 @@ def run_seed(account_number, database_url=None):
         )
     """, (ACCOUNT,))
     for table in ("dashboard_transactions", "income_transactions", "bills",
-                  "bank_accounts", "cards", "fraud_alerts", "card_lock_logs",
+                  "cards", "fraud_alerts", "card_lock_logs",
                   "savings_goals", "credit_score_history", "reward_points_log",
                   "redemptions", "late_payments", "kyc_submissions",
                   "handoff_queue", "chat_history"):
@@ -189,27 +189,22 @@ def run_seed(account_number, database_url=None):
         return anomaly_dt.replace(hour=hour, minute=minute, second=0, microsecond=0).isoformat()
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # 1. LINKED BANK ACCOUNTS / WALLETS — fully linked, multi-bank
+    # 1. CARD
+    #    Linked bank accounts used to be seeded here too, back when they were
+    #    a plain `bank_accounts` row with no real flow behind it. Now that
+    #    linking goes through the actual AISP mock-consent flow (login ->
+    #    scope consent -> aisp_consents/aisp_account_snapshots/aisp_transactions),
+    #    seeding one here would mean faking a consent record with no real
+    #    grant behind it — so linked accounts are intentionally NOT seeded.
+    #    To see the Wallet tab's linked-account UI populated, go through
+    #    Wallet -> Connect via MockBank (Demo AISP) in the running app.
     # ══════════════════════════════════════════════════════════════════════════════
-    WALLETS = [
-        ("Meezan Bank", "PK36MEZN0000001234567890"),
-        ("HBL",         "PK24HABB0000009876543210"),
-        ("EasyPaisa",   "PK11EPAY0000001122334455"),
-        ("SadaPay",     "PK09SADA0000005566778899"),
-    ]
-    bank_rows = [(ACCOUNT, bank, iban, "linked", dt(0, 2, 9 + i))
-                 for i, (bank, iban) in enumerate(WALLETS)]
-    c.executemany("""
-        INSERT INTO bank_accounts(account_number, bank_name, iban, status, linked_at)
-        VALUES (%s, %s, %s, %s, %s)
-    """, bank_rows)
-
     CARD_LAST4 = "4821"
     c.execute("""
         INSERT INTO cards(account_number, card_number, cardholder_name, expiry, nickname, status)
         VALUES (%s, %s, %s, %s, %s, 'active')
     """, (ACCOUNT, CARD_LAST4, NAME.upper(), "09/29", "Primary Card"))
-    print(f"  ✓  Linked {len(bank_rows)} bank accounts/wallets + 1 card")
+    print(f"  ✓  Linked 1 card")
 
     # ══════════════════════════════════════════════════════════════════════════════
     # 2. 12-MONTH FINANCIAL SIMULATION

@@ -62,6 +62,10 @@ from advisor_profile_routes import advisor_profile_bp, init_profile_tables
 from goals_routes import goals_bp, init_goals_tables
 from nlp_module import BankAIConversation, set_recipient_resolver, set_account_resolver
 
+# ── Mock AISP (Account Information Service Provider) — read-only Open
+#    Banking demo. See mock_aisp_provider.py header for the full flow.
+from mock_aisp_provider import mock_aisp_bp, mock_aisp_exchange_code
+
 # ── Optional: speech recognition ─────────────────────────────────────────────
 try:
     import speech_recognition as sr
@@ -88,7 +92,40 @@ logger = logging.getLogger(__name__)
 # In dev the build folder won't exist — that's fine, we just serve the API.
 REACT_BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'dist')
 
-app = Flask(__name__, static_folder=REACT_BUILD_DIR, static_url_path='/')
+# Vite's actual build output for JS/CSS lives under dist/assets. We scope
+# Flask's auto-registered static handler to JUST that subfolder (not '/')
+# so it can't shadow the serve_react catch-all below. Flask's built-in
+# static route and our catch-all both match the same "/<path:...>" pattern
+# — if static_url_path were '/', the auto-registered static rule (added
+# during Flask.__init__, before serve_react's @app.route decorator even
+# runs) wins that match for every non-root path. It does a plain filesystem
+# lookup for that literal path, finds nothing for e.g. "/dashboard" (there's
+# no file named "dashboard" in dist/), and 404s — so the catch-all's
+# index.html fallback (which is what lets React Router render client-side
+# routes like /dashboard) never runs. Every other path in this app is
+# reached via client-side navigation, which never hits the server, so this
+# only bites on paths reached by a real HTTP redirect — like the AISP
+# consent-flow callback landing on /dashboard?view=wallet&aisp_linked=1.
+REACT_ASSETS_DIR = os.path.join(REACT_BUILD_DIR, 'assets')
+
+app = Flask(__name__, static_folder=REACT_ASSETS_DIR, static_url_path='/assets')
+
+# ── Frontend origin — where the SPA actually lives ──────────────────────────
+# Server-issued redirects (the AISP consent-flow callback below) need to
+# send the *browser* back into the running SPA once they're done, not just
+# back to this Flask process. In production frontend and backend share an
+# origin, so a bare relative path ('/dashboard?...') is enough — that's
+# FRONTEND_ORIGIN = ''. In a split dev setup (Vite dev-server on 5173,
+# Flask on 5000) a relative redirect stays stuck on port 5000, which has no
+# built dist/ to fall back on — that's the plain
+# {"status": "FinBud AI backend running"} JSON you get instead of the app.
+# Auto-detected below: same-origin if dist/ exists (prod-style run),
+# Vite's default dev port otherwise. Override with FRONTEND_ORIGIN in .env
+# if your Vite dev-server runs on a different host/port.
+FRONTEND_ORIGIN = os.getenv('FRONTEND_ORIGIN', '').rstrip('/')
+if not FRONTEND_ORIGIN:
+    FRONTEND_ORIGIN = '' if os.path.exists(os.path.join(REACT_BUILD_DIR, 'index.html')) else 'http://localhost:5173'
+
 # Fixed key from env so sessions survive restarts/redeploys and stay valid
 # across multiple Gunicorn workers. Falls back to a per-process random key
 # (with a warning) only if SECRET_KEY isn't set, so dev still works out of
@@ -120,6 +157,12 @@ app.register_blueprint(goals_bp)
 # ── Grow My Money: investing guides (isolated blueprint, see investing_guide_routes.py) ──
 from investing_guide_routes import investing_guide_bp
 app.register_blueprint(investing_guide_bp)
+
+# ── Mock AISP consent portal (the "you've left FinBud, sign in to your
+#    bank" flow) — see mock_aisp_provider.py. Its routes live under
+#    /mock-aisp/*; the real FinBud-side endpoints (/api/aisp/*) are defined
+#    further down, in the DIGITAL WALLET section.
+app.register_blueprint(mock_aisp_bp)
 
 # ── Admin/Ops Console blueprints (auth, overview, chat-monitor, tickets, ─────
 #    transactions, users, fees, settings, fraud, activity, rewards, kyc —
@@ -388,23 +431,40 @@ release_pg_conn(_goals_init_conn)
 @app.route('/<path:path>')
 def serve_react(path):
     """
-    Serve the React build for every non-API route.
-    In development (no dist/ folder) this is never hit because the Vite
-    dev-server handles all non-/api paths itself.
-    In production (after `npm run build`) this serves index.html for every
-    path, letting React Router handle client-side navigation.
-    """
-    # API routes are handled by their own @app.route decorators — Flask
-    # matches those first, so this catch-all is only reached for frontend paths.
-    dist_index = os.path.join(REACT_BUILD_DIR, 'index.html')
-    if os.path.exists(dist_index):
-        return send_from_directory(REACT_BUILD_DIR, 'index.html')
+    Serve the React build for every non-API, non-/assets route.
+    In development (no dist/ folder) this is never hit for frontend paths
+    because the Vite dev-server handles those itself — but note that
+    server-issued redirects (e.g. the AISP consent-flow callback) still
+    target this Flask process directly, so in a split dev setup
+    (Vite on 5173, Flask on 5000) those land here with no dist/ folder and
+    hit the JSON fallback below, not the Vite app. See the frontend
+    LinkBankAccount / callback notes if that's the 404 you're chasing.
 
-    # Dev mode — Vite is serving the frontend, Flask is API-only.
-    return jsonify({
-        'status': 'FinBud AI backend running',
-        'note': 'Start the Vite dev-server with: cd frontend && npm run dev'
-    }), 200
+    In production (after `npm run build`) this serves any real static file
+    that exists at the root of dist/ (favicon.ico, robots.txt, etc. — the
+    contents of frontend/public/) directly, and index.html for every other
+    path, letting React Router handle client-side navigation client-side —
+    including deep paths like /dashboard that have no matching file on disk.
+    """
+    # API routes and /assets/* are handled by their own @app.route /
+    # static-route rules — Flask matches those first, so this catch-all is
+    # only reached for actual frontend paths.
+    dist_index = os.path.join(REACT_BUILD_DIR, 'index.html')
+    if not os.path.exists(dist_index):
+        # Dev mode — Vite is serving the frontend, Flask is API-only.
+        return jsonify({
+            'status': 'FinBud AI backend running',
+            'note': 'Start the Vite dev-server with: cd frontend && npm run dev'
+        }), 200
+
+    if path:
+        candidate = os.path.join(REACT_BUILD_DIR, path)
+        # os.path.isfile also protects against path traversal resolving
+        # outside REACT_BUILD_DIR ever matching a real file here.
+        if os.path.isfile(candidate):
+            return send_from_directory(REACT_BUILD_DIR, path)
+
+    return send_from_directory(REACT_BUILD_DIR, 'index.html')
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2908,14 +2968,137 @@ def add_card():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DIGITAL WALLET  — Bank Account Linking
+# DIGITAL WALLET  — AISP (Account Information Service Provider) Bank Linking
+#
+# Read-only Open Banking, mocked. FinBud is redirected to MockBank's own
+# consent portal (mock_aisp_provider.py, /mock-aisp/*), the user logs in and
+# approves/denies there, and MockBank redirects back to /api/aisp/link/callback
+# with either an authorization code (approve) or error=access_denied (deny).
+# There is no payment/transfer endpoint anywhere in this section — AISP is
+# read-only by definition. IBFT/Raast transfers (execute_transfer, Send Money)
+# are a completely separate feature and are untouched by any of this.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.route('/api/wallet/bank-accounts', methods=['GET'])
-def wallet_bank_accounts():
+@app.route('/api/aisp/link/start', methods=['GET'])
+def aisp_link_start():
     """
-    Returns all bank accounts linked (or pending) for the logged-in user.
-    Reply: { success, accounts: [{ bank, masked_iban, status }, ...] }
+    Kicks off the mock AISP consent flow. Generates a CSRF `state`, stashes
+    it in the session so /api/aisp/link/callback can verify the redirect
+    actually came from a flow FinBud started, and hands back MockBank's
+    consent-portal URL for the frontend to send the browser to.
+    Reply: { success, url }
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    state = secrets.token_urlsafe(24)
+    session['aisp_state'] = state
+
+    redirect_uri = url_for('aisp_link_callback', _external=True)
+    consent_url = url_for(
+        'mock_aisp.consent_login_page',
+        _external=True,
+        state=state,
+        redirect_uri=redirect_uri
+    )
+
+    return jsonify({'success': True, 'url': consent_url})
+
+
+@app.route('/api/aisp/link/callback', methods=['GET'])
+def aisp_link_callback():
+    """
+    MockBank redirects here after the user approves or denies consent on
+    its (simulated) portal. Always redirects the browser back into the
+    FinBud SPA on the Wallet tab — never leaves the user on a dead-end page.
+    Uses FRONTEND_ORIGIN (see Flask setup, top of file) so this lands on
+    wherever the SPA is actually running, not just this Flask process.
+
+    Deny path (error=access_denied): no DB writes, redirect to
+      {FRONTEND_ORIGIN}/dashboard?view=wallet — no aisp_linked flag, so the
+      frontend shows no false success message.
+
+    Approve path: validate `state` against what /link/start stored in the
+      session (basic CSRF hygiene), exchange the single-use code for the
+      mocked account data via mock_aisp_exchange_code(), and insert one row
+      each into aisp_consents (status='active', expires_at = now + 90 days),
+      aisp_account_snapshots, and aisp_transactions. Only then redirect with
+      ?aisp_linked=1.
+    """
+    def _wallet_redirect(linked=False):
+        suffix = '&aisp_linked=1' if linked else ''
+        return redirect(f"{FRONTEND_ORIGIN}/dashboard?view=wallet{suffix}")
+
+    expected_state = session.pop('aisp_state', None)
+
+    # Deny path — user hit "Deny" on MockBank's consent screen. A denied
+    # consent isn't a FinBud-side error, so land back on Wallet quietly.
+    if request.args.get('error') == 'access_denied':
+        return _wallet_redirect()
+
+    if 'user_id' not in session:
+        return _wallet_redirect()
+
+    state = request.args.get('state', '')
+    if not expected_state or state != expected_state:
+        return _wallet_redirect()
+
+    code = request.args.get('code', '')
+    redirect_uri = url_for('aisp_link_callback', _external=True)
+    data = mock_aisp_exchange_code(code, redirect_uri)
+    if not data:
+        # Missing/expired/already-used/mismatched code — nothing to insert.
+        return _wallet_redirect()
+
+    try:
+        account_number = session['account_number']
+        consented_at = now_pk()
+        expires_at = consented_at + timedelta(days=90)
+
+        conn = get_pg_conn(); c = conn.cursor()
+        c.execute("""
+            INSERT INTO aisp_consents
+                (account_number, bank_name, iban, holder_name, scopes, status, consented_at, expires_at)
+            VALUES (%s, %s, %s, %s, %s, 'active', %s, %s)
+            RETURNING id
+        """, (account_number, data['bank_name'], data['iban'], data['holder_name'],
+              data['scopes'], consented_at, expires_at))
+        consent_id = c.fetchone()['id']
+
+        c.execute("""
+            INSERT INTO aisp_account_snapshots (consent_id, balance, last_synced_at)
+            VALUES (%s, %s, %s)
+        """, (consent_id, data['balance'], consented_at))
+
+        for txn in data['transactions']:
+            c.execute("""
+                INSERT INTO aisp_transactions (consent_id, description, amount, txn_date)
+                VALUES (%s, %s, %s, %s)
+            """, (consent_id, txn['description'], txn['amount'], txn['date']))
+
+        conn.commit(); release_pg_conn(conn)
+
+    except Exception as e:
+        print(f"[aisp_link_callback] error: {e}")
+        return _wallet_redirect()
+
+    return _wallet_redirect(linked=True)
+
+
+@app.route('/api/wallet/linked-accounts', methods=['GET'])
+def wallet_linked_accounts():
+    """
+    Returns active, non-expired AISP consents for the logged-in user, each
+    joined with its latest balance snapshot and recent transactions.
+
+    Core AISP rule: a consent that's revoked or past expires_at returns no
+    balance/transaction data at all, even though the historical rows still
+    exist in the DB — status='active' AND expires_at > now() is the gate.
+
+    Reply: { success, accounts: [
+      { id, bank, masked_iban, holder_name, status, balance, last_synced_at,
+        transactions: [{ description, amount, date }, ...] }, ...
+    ] }
     """
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
@@ -2924,67 +3107,92 @@ def wallet_bank_accounts():
         account_number = session['account_number']
         conn = get_pg_conn(); c = conn.cursor()
         c.execute("""
-            SELECT bank_name, iban, status
-            FROM bank_accounts
-            WHERE account_number=%s
-            ORDER BY linked_at DESC
-        """, (account_number,))
-        rows = c.fetchall(); release_pg_conn(conn)
+            SELECT c.id, c.bank_name, c.iban, c.holder_name, c.status,
+                   s.balance, s.last_synced_at
+            FROM aisp_consents c
+            JOIN aisp_account_snapshots s ON s.consent_id = c.id
+            WHERE c.account_number = %s
+              AND c.status = 'active'
+              AND c.expires_at > %s
+            ORDER BY c.consented_at DESC
+        """, (account_number, now_pk()))
+        rows = c.fetchall()
 
-        accounts = [
-            {
-                'bank':        r['bank_name'],
-                # Mask the IBAN: show country+check digits + last 4 only
-                'masked_iban': f"{r['iban'][:4]} **** **** **** {r['iban'][-4:]}",
-                'status':      r['status']
-            }
-            for r in rows
-        ]
+        accounts = []
+        for r in rows:
+            c.execute("""
+                SELECT description, amount, txn_date
+                FROM aisp_transactions
+                WHERE consent_id = %s
+                ORDER BY txn_date DESC
+                LIMIT 20
+            """, (r['id'],))
+            txn_rows = c.fetchall()
+
+            accounts.append({
+                'id':             r['id'],
+                'bank':           r['bank_name'],
+                'masked_iban':    f"{r['iban'][:4]} **** **** **** {r['iban'][-4:]}",
+                'holder_name':    r['holder_name'],
+                'status':         r['status'],
+                'balance':        float(r['balance']),
+                'last_synced_at': r['last_synced_at'].isoformat() if r['last_synced_at'] else None,
+                'transactions': [
+                    {
+                        'description': t['description'],
+                        'amount':      float(t['amount']),
+                        'date':        t['txn_date'].isoformat() if hasattr(t['txn_date'], 'isoformat') else t['txn_date'],
+                    }
+                    for t in txn_rows
+                ],
+            })
+
+        release_pg_conn(conn)
         return jsonify({'success': True, 'accounts': accounts})
 
     except Exception as e:
-        print(f"[wallet_bank_accounts] error: {e}")
+        print(f"[wallet_linked_accounts] error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@app.route('/api/wallet/link-bank', methods=['POST'])
-def link_bank():
+@app.route('/api/aisp/revoke', methods=['POST'])
+def aisp_revoke():
     """
-    Records a bank-linking request with status='pending'.
-    Real OTP / Open Banking consent flow is the post-competition upgrade path
-    (1LINK Open API Gateway + SBP TPP registration).
-    Body:  { bank, iban }
-    Reply: { success, message }
+    Revokes an AISP consent. Sets status='revoked' + revoked_at=now — the
+    row is NOT deleted, so a future "access history" list can show past-
+    revoked connections, same as real Open Banking dashboards do. Once
+    revoked, /api/wallet/linked-accounts stops returning this account's
+    data immediately (its status no longer passes the 'active' filter).
+    Body:  { consent_id }
+    Reply: { success }
     """
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
     try:
-        data           = request.json
-        bank           = data.get('bank', '').strip()
-        iban           = data.get('iban', '').strip().upper()
+        data = request.json or {}
+        consent_id = data.get('consent_id')
         account_number = session['account_number']
 
-        # Basic IBAN validation (per mentor's slot-filling feedback: exactly 24 chars)
-        if not bank:
-            return jsonify({'success': False, 'message': 'Bank name is required'}), 400
-        if len(iban) != 24:
-            return jsonify({'success': False, 'message': 'IBAN must be exactly 24 characters'}), 400
+        if not consent_id:
+            return jsonify({'success': False, 'message': 'consent_id is required'}), 400
 
         conn = get_pg_conn(); c = conn.cursor()
         c.execute("""
-            INSERT INTO bank_accounts(account_number, bank_name, iban, status, linked_at)
-            VALUES (%s, %s, %s, 'pending', %s)
-        """, (account_number, bank, iban, now_pk().isoformat()))
+            UPDATE aisp_consents
+            SET status = 'revoked', revoked_at = %s
+            WHERE id = %s AND account_number = %s AND status = 'active'
+        """, (now_pk(), consent_id, account_number))
+        updated = c.rowcount
         conn.commit(); release_pg_conn(conn)
 
-        return jsonify({
-            'success': True,
-            'message': f'{bank} link request received — pending consent verification.'
-        })
+        if updated == 0:
+            return jsonify({'success': False, 'message': 'Consent not found or already inactive.'}), 404
+
+        return jsonify({'success': True})
 
     except Exception as e:
-        print(f"[link_bank] error: {e}")
+        print(f"[aisp_revoke] error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 

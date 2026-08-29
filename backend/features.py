@@ -182,19 +182,72 @@ def init_db():
         created_at     VARCHAR(64)
     )''')
 
-    # Bank accounts — Digital Wallet tab
-    # Stores bank-linking requests; status starts as 'pending'
+    # ── AISP (Account Information Service Provider) — Digital Wallet tab ──────
+    # Replaces the old "pending forever, does nothing" bank_accounts table.
+    # This is the read-only half of Open Banking: a consent (the permission
+    # grant) is modeled separately from the data that consent lets you read,
+    # because that mirrors how real Open Banking works — consent has its own
+    # lifecycle (it can expire or be revoked independently of data already
+    # pulled). Swapping the mock AISP provider for a real bank/aggregator
+    # later only means changing how the snapshot/transactions tables get
+    # populated, not their shape.
+    old_table_exists = False
+    try:
+        c.execute("SELECT to_regclass('public.bank_accounts')")
+        old_table_exists = c.fetchone()['to_regclass'] is not None
+    except Exception:
+        conn.rollback()
+
+    # aisp_consents: the permission record. Gate ALL reads on status='active'
+    # (and expires_at in the future) — that's the core AISP rule: no active
+    # consent, no data access, full stop.
     c.execute('''
-    CREATE TABLE IF NOT EXISTS bank_accounts (
-        id             SERIAL PRIMARY KEY,
-        account_number VARCHAR(30)  NOT NULL,
-        bank_name      VARCHAR(120),
-        iban           VARCHAR(34),
-        status         VARCHAR(20) DEFAULT 'pending',
-        linked_at      VARCHAR(64)
+    CREATE TABLE IF NOT EXISTS aisp_consents (
+        id              SERIAL PRIMARY KEY,
+        account_number  VARCHAR(50) NOT NULL,        -- FinBud user this consent belongs to
+        bank_name       VARCHAR(120) NOT NULL,       -- e.g. 'MockBank (Demo)'
+        iban            VARCHAR(34) NOT NULL,
+        holder_name     VARCHAR(120),
+        scopes          VARCHAR(200) NOT NULL,       -- e.g. 'balance,transactions,identity'
+        status          VARCHAR(20) NOT NULL DEFAULT 'active',  -- active | revoked | expired
+        consented_at    TIMESTAMP NOT NULL,
+        expires_at      TIMESTAMP NOT NULL,          -- mock 90-day consent lifetime, matches real PSD2-style re-consent windows
+        revoked_at      TIMESTAMP
+    )''')
+
+    # aisp_account_snapshots / aisp_transactions: the actual data pulled
+    # because of that consent. Rows here persist even if the consent above
+    # is later revoked or expires — only the API layer (app.py) enforces
+    # that expired/revoked consents can't surface this data anymore.
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS aisp_account_snapshots (
+        consent_id      INTEGER PRIMARY KEY REFERENCES aisp_consents(id) ON DELETE CASCADE,
+        balance         NUMERIC(15,2) NOT NULL,
+        last_synced_at  TIMESTAMP NOT NULL
+    )''')
+
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS aisp_transactions (
+        id              SERIAL PRIMARY KEY,
+        consent_id      INTEGER NOT NULL REFERENCES aisp_consents(id) ON DELETE CASCADE,
+        description     TEXT NOT NULL,
+        amount          NUMERIC(15,2) NOT NULL,      -- signed: negative = debit, positive = credit
+        txn_date        DATE NOT NULL
     )''')
 
     conn.commit()
+
+    # Old bank_accounts table is being replaced, not extended — any rows in
+    # it are throwaway "pending forever" demo data from the old manual-link
+    # flow, so it's safe to drop once the new tables exist.
+    if old_table_exists:
+        try:
+            c.execute("DROP TABLE IF EXISTS bank_accounts")
+            conn.commit()
+            print("[init_db] dropped legacy bank_accounts table (replaced by aisp_* tables).")
+        except Exception as ex:
+            conn.rollback()
+            print(f"[init_db] could not drop legacy bank_accounts table, skipping: {ex}")
 
     # ── Safe column additions for tables that may already exist on disk ──────
     # ADD COLUMN IF NOT EXISTS is idempotent — safe to run on every startup.

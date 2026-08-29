@@ -481,6 +481,36 @@ export default function Dashboard() {
 
   useEffect(() => { loadAll() }, [])
 
+  // ── AISP CONSENT REDIRECT LANDING ───────────────────────
+  // After the MockBank consent portal redirects back, app.py's
+  // /api/aisp/link/callback lands the browser on
+  // /dashboard?view=wallet[&aisp_linked=1]. Runs once on mount:
+  //   view=wallet (always present on return from the flow) -> open the
+  //     Wallet tab so the user is actually looking at what changed.
+  //   aisp_linked=1 (approve path only) -> force a wallet refetch and show
+  //     an explicit success confirmation. Absent on the deny path — a
+  //     denied consent isn't a FinBud-side error, so no modal there.
+  // Query params are stripped afterward so a page refresh doesn't
+  // re-trigger the modal.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const view = params.get('view')
+    const aispLinked = params.get('aisp_linked')
+    if (view !== 'wallet') return
+
+    setActiveView('wallet')
+    if (aispLinked === '1') {
+      setWallet(w => ({ ...w, loaded: false }))
+      setModal({
+        type: 'alert',
+        title: 'Account Linked!',
+        message: 'Your MockBank account is now connected — you can view its balance and transactions here anytime.',
+        color: 'var(--income)'
+      })
+    }
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [])
+
   // ── LIVE UPDATES ──────────────────────────────────────────
   // The backend already writes both legs of a FinBud→FinBud transfer the
   // instant it happens (sender AND recipient balance/transactions/
@@ -709,8 +739,10 @@ export default function Dashboard() {
 
   async function loadWalletData() {
     // /api/cards/list already exists in the backend (used for the Emergency
-    // gate) so cards populate for real today. /api/wallet/bank-accounts does
-    // not exist yet — falls back to an empty "no accounts linked" state.
+    // gate) so cards populate for real today. /api/wallet/linked-accounts
+    // returns AISP consents that are still active + non-expired, each with
+    // its balance snapshot and recent transactions — see wallet_linked_accounts()
+    // in app.py.
     let cards = []
     try {
       const cRes = await fetch('/api/cards/list', { credentials: 'include' })
@@ -722,7 +754,7 @@ export default function Dashboard() {
 
     let linkedBanks = [], linkedBanksAvailable = false
     try {
-      const bRes = await fetch('/api/wallet/bank-accounts', { credentials: 'include' })
+      const bRes = await fetch('/api/wallet/linked-accounts', { credentials: 'include' })
       if (bRes.ok) {
         const bData = await bRes.json()
         if (bData.success) { linkedBanks = bData.accounts || []; linkedBanksAvailable = true }
@@ -1654,62 +1686,42 @@ export default function Dashboard() {
     )
   }
 
+  // AISP consent flow — single button, no manual IBAN form. Manual entry
+  // doesn't make sense here: you're not telling FinBud your bank account,
+  // you're proving you have access to it via MockBank's own (simulated)
+  // login + scope-consent screens. See the AISP handoff doc for the full
+  // flow: Connect -> MockBank login -> scope consent -> back on Wallet tab.
   function LinkBankAccount() {
-    const [bank, setBank] = useState('')
-    const [iban, setIban] = useState('')
+    const [connecting, setConnecting] = useState(false)
     const [error, setError] = useState('')
-    const [loading, setLoading] = useState(false)
 
-    function handleIbanChange(v) {
-      setIban(v.toUpperCase().replace(/\s/g, '').slice(0, 24))
-    }
-
-    const detectedBank = iban.length === 24 ? detectBankFromIBAN(iban) : null
-
-    async function handleSubmit(e) {
-      e.preventDefault()
-      if (!bank) { setError('Please select your bank.'); return }
-      if (iban.length !== 24) { setError('IBAN must be exactly 24 characters.'); return }
-      setError(''); setLoading(true)
+    async function handleConnect() {
+      setConnecting(true)
       try {
-        const res = await fetch('/api/wallet/link-bank', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-          body: JSON.stringify({ bank, iban })
-        })
-        if (res.status === 404) {
-          setModal({ type: 'alert', title: 'Coming Soon', message: "Real account linking needs each bank's consent under SBP's Open Banking framework (or a 1LINK Open API integration) — this screen is ready and waiting for that connection. See the research doc for details.", color: 'var(--primary-purple)' })
-          setLoading(false); return
-        }
+        const res = await fetch('/api/aisp/link/start', { credentials: 'include' })
         const data = await res.json()
-        if (data.success) {
-          setWallet(w => ({ ...w, loaded: false }))
-          setModal({ type: 'alert', title: 'Request Sent', message: `A consent request has been sent to link your ${bank} account.`, color: 'var(--income)' })
-        } else { setError(data.message || 'Could not link account.') }
-      } catch { setError('Server error. Please try again.') }
-      setLoading(false)
+        if (data.success) window.location.href = data.url
+        else { setError('Could not start connection.'); setConnecting(false) }
+      } catch { setError('Server error.'); setConnecting(false) }
     }
 
     return (
       <div>
         <h3>Link a Bank Account</h3>
-        <p style={{ fontSize: 12, color: '#777', marginTop: -8 }}>Connect any Pakistani bank account to view its balance and transactions inside FinBud.</p>
-        <form onSubmit={handleSubmit}>
-          <label>Bank</label>
-          <select value={bank} onChange={e => setBank(e.target.value)} required>
-            <option value="">Select bank...</option>
-            {PAKISTAN_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
-          </select>
-          <label>IBAN</label>
-          <input type="text" required placeholder="e.g., PK36SCBL0000001123456702" value={iban} maxLength={24} onChange={e => handleIbanChange(e.target.value)} />
-          <div className="bank-detect-note">
-            {iban.length === 24
-              ? (detectedBank ? `Matches: ${detectedBank}` : 'Bank code not recognized — double-check the IBAN.')
-              : `${iban.length}/24 characters`}
-          </div>
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
-          <button type="submit" className="modal-btn-primary" disabled={loading}>{loading ? 'Sending Request...' : 'SEND LINK REQUEST'}</button>
-        </form>
-        <p style={{ fontSize: 11, color: '#6b7280', marginTop: 12 }}>You'll be asked to verify with your bank via OTP before the account is linked — FinBud never sees or stores your online banking password.</p>
+        <p style={{ fontSize: 12, color: '#777', marginTop: -8 }}>
+          See your bank balance and recent transactions inside FinBud —
+          read-only, revocable anytime.
+        </p>
+        <button type="button" className="modal-btn-primary" onClick={handleConnect} disabled={connecting}>
+          {connecting ? 'Redirecting…' : '🏦 Connect via MockBank (Demo AISP)'}
+        </button>
+        <p style={{ fontSize: 11, color: '#6b7280', marginTop: 12 }}>
+          Demo login: <code>demo_user</code> / <code>demo1234</code>.
+          This simulates the consent flow SBP's Open Banking framework will
+          require once live — FinBud only ever gets read access, never your
+          password, and never the ability to move this money.
+        </p>
+        {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</p>}
       </div>
     )
   }
@@ -1998,6 +2010,31 @@ export default function Dashboard() {
           <button className="modal-btn-primary" onClick={() => setModal(null)}>OK</button>
         </div>
       )
+      case 'confirmRevoke': return (
+        <div>
+          <h3>Revoke Access?</h3>
+          <p style={{ fontSize: 13, color: '#555' }}>
+            FinBud will no longer be able to see {modal.bankName}'s balance or
+            transactions. You can reconnect it anytime by going through the
+            consent flow again.
+          </p>
+          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <button type="button" className="modal-btn-secondary" onClick={() => setModal(null)}>
+              Cancel
+            </button>
+            <button type="button" className="modal-btn-danger" onClick={async () => {
+              await fetch('/api/aisp/revoke', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+                body: JSON.stringify({ consent_id: modal.consentId })
+              })
+              setWallet(w => ({ ...w, loaded: false }))
+              setModal(null)
+            }}>
+              Revoke Access
+            </button>
+          </div>
+        </div>
+      )
       default: return null
     }
   }
@@ -2208,6 +2245,19 @@ export default function Dashboard() {
         .wallet-row > span { flex-shrink:0; }
         .wallet-status-pill { font-size:11px; font-weight:700; text-transform:uppercase; padding:4px 10px; border-radius:20px; background:rgba(16,185,129,0.12); color:var(--income); }
         .wallet-status-pill.locked { background:rgba(185,28,28,0.12); color:var(--danger); }
+
+        /* AISP linked-account block — bank row + balance, collapsible
+           transaction list, and per-account revoke control. */
+        .open-banking-banner { font-size:12px; color:#6b7280; background:var(--secondary-purple); border-radius:8px; padding:10px 12px; margin-bottom:14px; line-height:1.5; }
+        .linked-account-block { padding:14px 0; border-bottom:1px solid var(--secondary-purple); }
+        .linked-account-block:last-child { border-bottom:none; }
+        .linked-account-balance { display:block; font-size:15px; }
+        .linked-account-actions { display:flex; gap:14px; align-items:center; margin-top:8px; }
+        .linked-account-toggle { background:none; border:none; padding:0; color:var(--primary-purple); font-size:12px; font-weight:700; cursor:pointer; }
+        .linked-account-revoke { background:none; border:none; padding:0; color:var(--danger); font-size:12px; font-weight:700; cursor:pointer; margin-left:auto; }
+        .linked-account-txns { margin-top:10px; background:var(--secondary-purple); border-radius:8px; padding:2px 12px; }
+        .linked-account-txn-row { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid rgba(0,0,0,0.06); font-size:13px; }
+        .linked-account-txn-row:last-child { border-bottom:none; }
         .pace-compare-row { display:flex; gap:20px; margin-bottom:18px; flex-wrap:wrap; }
         .pace-compare-stat { flex:1; min-width:140px; background:var(--secondary-purple); border-radius:8px; padding:12px 14px; }
         .pace-compare-label { display:block; font-size:11px; font-weight:600; color:#6b7280; text-transform:uppercase; margin-bottom:6px; }
@@ -2242,6 +2292,8 @@ export default function Dashboard() {
         .modal-btn-primary { width:100%; padding:12px; margin-top:25px; background:var(--primary-purple); color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:700; text-transform:uppercase; font-size:14px; }
         .modal-btn-primary:disabled { opacity:0.6; cursor:not-allowed; }
         .modal-btn-secondary { width:100%; padding:12px; margin-top:10px; background:transparent; color:var(--primary-purple); border:2px solid var(--primary-purple); border-radius:6px; cursor:pointer; font-weight:700; text-transform:uppercase; font-size:14px; }
+        .modal-btn-danger { width:100%; padding:12px; margin-top:10px; background:var(--danger); color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:700; text-transform:uppercase; font-size:14px; }
+        .modal-btn-danger:disabled { opacity:0.6; cursor:not-allowed; }
 
         /* Icon-choice grid — used for the "pick one" steps of the Send
            Money and Pay Bill modal flows (method, bill category, provider) */
