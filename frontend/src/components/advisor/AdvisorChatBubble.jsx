@@ -68,6 +68,7 @@ export default function AdvisorChatBubble() {
   // One voice manager per mounted bubble, torn down on unmount.
   useEffect(() => {
     voiceManagerRef.current = new FinBudVoiceManager({
+      lang: 'ur-PK',
       onTranscript: (transcript) => { sendMessage(transcript) },
       onStateChange: (state) => setVoiceState(state),
       onError: (err) => {
