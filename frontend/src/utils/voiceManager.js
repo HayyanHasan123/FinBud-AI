@@ -94,9 +94,9 @@ export class FinBudVoiceManager {
    *   responsible for sending it to FinBud's backend.
    * @param {(state: 'idle'|'listening'|'processing'|'speaking') => void} opts.onStateChange
    * @param {(error: string) => void} [opts.onError]
-   * @param {string} [opts.lang] - BCP-47 language tag, defaults to 'en-US'.
+   * @param {string} [opts.lang] - BCP-47 language tag, defaults to 'ur-PK'.
    */
-  constructor({ onTranscript, onStateChange, onError, lang = 'en-US' } = {}) {
+  constructor({ onTranscript, onStateChange, onError, lang = 'ur-PK' } = {}) {
     this.onTranscript = onTranscript || (() => {})
     this.onStateChange = onStateChange || (() => {})
     this.onError = onError || (() => {})
