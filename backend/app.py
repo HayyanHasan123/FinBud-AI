@@ -60,8 +60,10 @@ from features import (
 # ── Savings Goals feature (self-contained blueprint) ───────────────────────
 from advisor_profile_routes import advisor_profile_bp, init_profile_tables
 from goals_routes import goals_bp, init_goals_tables
-from nlp_module import BankAIConversation, set_recipient_resolver, set_account_resolver
-
+from nlp_module import (
+    BankAIConversation, set_recipient_resolver, set_account_resolver,
+    CANCEL_PATTERNS, _matches_any, normalize_for_matching
+)
 # ── Mock AISP (Account Information Service Provider) — read-only Open
 #    Banking demo. See mock_aisp_provider.py header for the full flow.
 from mock_aisp_provider import mock_aisp_bp, mock_aisp_exchange_code
@@ -199,6 +201,37 @@ def release_db(conn):
     """Returns the connection back to the pool instead of closing it."""
     connection_pool.putconn(conn)
 
+def _current_chat_session_id(conn, account_number):
+    """
+    Returns the id of this account's currently-open chat session, lazily
+    creating one on first use. Cached in the Flask session cookie under
+    'chat_session_id' so repeat calls in the same login skip the DB.
+    """
+    sid = session.get('chat_session_id')
+    if sid:
+        return sid
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO chat_sessions(account_number, status, started_at) "
+        "VALUES (%s, 'active', %s) RETURNING id",
+        (account_number, now_pk().isoformat())
+    )
+    sid = c.fetchone()['id']
+    conn.commit()
+    session['chat_session_id'] = sid
+    return sid
+
+
+def _log_chat(conn, account_number, user_message, ai_response, intent, sender='ai'):
+    """Single choke point for every chat_history insert, so session_id is
+    always stamped correctly and consistently."""
+    sid = _current_chat_session_id(conn, account_number)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO chat_history(account_number, session_id, user_message, ai_response, intent, created_at, sender)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (account_number, sid, user_message, ai_response, intent, now_pk().isoformat(), sender))
+    conn.commit()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phone -> (account_number, name) resolver for transfer_money / bill_payments
@@ -1019,26 +1052,50 @@ def chat_message():
         auth_hash = user['pin_hash'] or user['password_hash']
 
         # ── Human-mode bypass ───────────────────────────────────────────────
-        # If a banker has taken this conversation over (via Live Chat Monitor
-        # or by claiming the ticket), the bot needs to stay quiet instead of
-        # auto-replying on top of the banker. Just log the message and let
-        # the banker see it — no NLP, no ai_response.
+        # If a banker has taken this conversation over, the bot stays out of
+        # the way EXCEPT for two things: (1) it recognizes a cancel phrase
+        # (reusing the same CANCEL_PATTERNS the rest of the bot already uses
+        # - covers en/ur/roman-urdu) and hands control back to itself, and
+        # (2) on every other message it reminds the user they need to cancel
+        # first, instead of silently swallowing their message.
         c.execute("SELECT mode FROM conversation_state WHERE account_number = %s", (account_number,))
         conv_state_row = c.fetchone()
         if conv_state_row and conv_state_row['mode'] == 'human':
+            language     = session.get('conversation_context', {}).get('session_language') or 'en'
+            normalized   = normalize_for_matching(user_message)
+            wants_cancel = _matches_any(normalized, CANCEL_PATTERNS)
+
+            if wants_cancel:
+                now = now_pk().isoformat()
+                c.execute("""
+                    INSERT INTO conversation_state(account_number, mode, assigned_to, updated_at)
+                    VALUES (%s, 'bot', NULL, %s)
+                    ON CONFLICT(account_number) DO UPDATE SET
+                        mode='bot', assigned_to=NULL, updated_at=EXCLUDED.updated_at
+                """, (account_number, now))
+                c.execute("""
+                    UPDATE handoff_queue SET status='cancelled'
+                    WHERE account_number = %s AND status = 'pending'
+                """, (account_number,))
+                ai_response = chatbot.responses['human_mode_cancelled'][language]
+                intent = 'human_mode_cancelled'
+            else:
+                ai_response = chatbot.responses['human_mode_reminder'][language]
+                intent = 'human_mode_message'
+
             c.execute("""
-                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at, sender)
-                VALUES (%s, %s, NULL, 'human_mode_message', %s, 'user')
-            """, (account_number, user_message, now_pk().isoformat()))
+                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (account_number, user_message, ai_response, intent, now_pk().isoformat()))
             conn.commit()
             release_db(conn)
             return jsonify({
                 'success':     True,
-                'ai_response': None,
-                'intent':      'human_mode_message',
-                'language':    'en',
+                'ai_response': ai_response,
+                'intent':      intent,
+                'language':    language,
                 'llm_used':    False,
-                'human_mode':  True
+                'human_mode':  not wants_cancel
             })
 
         conversation_context = session.get('conversation_context', {})
@@ -1060,11 +1117,7 @@ def chat_message():
             session['conversation_context'] = {}
             ai_response = "No problem, I've cancelled that. Is there anything else I can help with?"
 
-            c.execute("""
-                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (account_number, user_message, ai_response, 'cancelled', now_pk().isoformat()))
-            conn.commit()
+            _log_chat(conn, account_number, user_message, ai_response, 'cancelled')
             release_db(conn)
 
             return jsonify({
@@ -1121,12 +1174,7 @@ def chat_message():
                     session['conversation_context'] = {}
                     session_reset = True
 
-            c.execute("""
-                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (account_number, "[Password verification]", ai_response, 'emergency',
-                  now_pk().isoformat()))
-            conn.commit()
+            _log_chat(conn, account_number, "[Password verification]", ai_response, 'emergency')
             release_db(conn)
 
             return jsonify({
@@ -1147,12 +1195,7 @@ def chat_message():
                 ai_response = chatbot.responses['password_incorrect'][language]
                 session['conversation_context'] = {}
 
-                c.execute("""
-                    INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (account_number, "[Password verification]", ai_response, original_intent,
-                      now_pk().isoformat()))
-                conn.commit()
+                _log_chat(conn, account_number, "[Password verification]", ai_response, original_intent)
                 release_db(conn)
 
                 return jsonify({
@@ -1321,12 +1364,7 @@ def chat_message():
                     session['conversation_context'] = {}
                     session_reset = True
 
-            c.execute("""
-                INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (account_number, "[Password verification]", ai_response, original_intent,
-                  now_pk().isoformat()))
-            conn.commit()
+            _log_chat(conn, account_number, "[Password verification]", ai_response, original_intent)
             release_db(conn)
 
             return jsonify({
@@ -1410,12 +1448,7 @@ def chat_message():
         if ai_response is None:
             ai_response = chatbot.responses['unknown'][language]
 
-        c.execute("""
-            INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (account_number, user_message, ai_response, intent, now_pk().isoformat()))
-
-        conn.commit()
+        _log_chat(conn, account_number, user_message, ai_response, intent)
         release_db(conn)
 
         # Read back context so frontend knows whether to show password modal
@@ -1448,46 +1481,106 @@ def chat_message():
         return jsonify({'success': False, 'message': 'An error occurred processing your message'}), 500
 
 
-@app.route('/api/chat/history', methods=['GET'])
-def chat_history_get():
-    # Lets Chat.jsx restore the visible conversation on page load / return
-    # from Dashboard, instead of starting blank every time. Pass ?since=
-    # (an ISO timestamp) to only pull messages from the current "session"
-    # onward — the frontend advances that marker whenever the conversation
-    # is reset (cancel or a completed transaction), so this naturally stops
-    # returning old, already-closed conversations.
+@app.route('/api/chat/session/new', methods=['POST'])
+def chat_new_session():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
     account_number = session['account_number']
-    since = request.args.get('since', '').strip()
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        old_sid = session.get('chat_session_id')
+        if old_sid:
+            c.execute("""
+                UPDATE chat_sessions SET status='closed', closed_at=%s
+                WHERE id=%s AND status='active'
+            """, (now_pk().isoformat(), old_sid))
+
+        c.execute("""
+            INSERT INTO chat_sessions(account_number, status, started_at)
+            VALUES (%s, 'active', %s) RETURNING id
+        """, (account_number, now_pk().isoformat()))
+        new_sid = c.fetchone()['id']
+        conn.commit()
+    finally:
+        release_db(conn)
+
+    session['conversation_context'] = {}
+    session['chat_session_id'] = new_sid
+
+    return jsonify({'success': True, 'session_id': new_sid})
+
+
+@app.route('/api/chat/history', methods=['GET'])
+def chat_history_get():
+    # No ?session_id= -> current active session (restores an in-progress
+    # conversation on page load). ?session_id=<id> -> a past session for
+    # the read-only history viewer.
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    account_number = session['account_number']
+    requested_sid  = request.args.get('session_id', type=int)
+    active_sid     = session.get('chat_session_id')
+    sid = requested_sid or active_sid
+
+    if not sid:
+        return jsonify({'success': True, 'messages': [], 'session_id': None, 'is_active': False})
 
     conn = get_db()
-    c    = conn.cursor()
+    c = conn.cursor()
     try:
-        if since:
-            c.execute("""
-                SELECT id, user_message, ai_response, intent,
-                       COALESCE(sender, 'ai') AS sender, engine, created_at
-                FROM chat_history
-                WHERE account_number = %s AND created_at >= %s
-                ORDER BY created_at ASC
-            """, (account_number, since))
-        else:
-            c.execute("""
-                SELECT id, user_message, ai_response, intent,
-                       COALESCE(sender, 'ai') AS sender, engine, created_at
-                FROM chat_history
-                WHERE account_number = %s
-                ORDER BY created_at ASC
-                LIMIT 200
-            """, (account_number,))
+        c.execute(
+            "SELECT status FROM chat_sessions WHERE id=%s AND account_number=%s",
+            (sid, account_number)
+        )
+        sess_row = c.fetchone()
+        if not sess_row:
+            return jsonify({'success': False, 'message': 'Chat session not found'}), 404
+
+        c.execute("""
+            SELECT id, user_message, ai_response, intent,
+                   COALESCE(sender, 'ai') AS sender, engine, created_at
+            FROM chat_history
+            WHERE session_id = %s
+            ORDER BY created_at ASC
+        """, (sid,))
         messages = [dict(r) for r in c.fetchall()]
     finally:
         release_db(conn)
 
-    return jsonify({'success': True, 'messages': messages})
+    return jsonify({
+        'success':    True,
+        'messages':   messages,
+        'session_id': sid,
+        'is_active':  sess_row['status'] == 'active' and sid == active_sid
+    })
 
+
+@app.route('/api/chat/sessions', methods=['GET'])
+def chat_sessions_list():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    account_number = session['account_number']
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("""
+            SELECT s.id, s.status, s.started_at, s.closed_at,
+                   (SELECT COALESCE(user_message, ai_response) FROM chat_history
+                    WHERE session_id = s.id ORDER BY created_at ASC LIMIT 1) AS preview
+            FROM chat_sessions s
+            WHERE s.account_number = %s
+            ORDER BY s.started_at DESC
+            LIMIT 50
+        """, (account_number,))
+        sessions = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    return jsonify({'success': True, 'sessions': sessions})
 
 @app.route('/api/chat/transcribe', methods=['POST'])
 def transcribe_audio():
@@ -1538,16 +1631,12 @@ def human_handoff():
 
     try:
         account_number = session['account_number']
-        language       = 'en'
+        language       = session.get('conversation_context', {}).get('session_language') or 'en'
         ai_response    = chatbot.responses['human_handoff'][language]
 
         conn = get_db()
         c    = conn.cursor()
-        c.execute("""
-            INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (account_number, "I want to talk to a human banker", ai_response,
-              'human_agent', now_pk().isoformat()))
+        _log_chat(conn, account_number, "I want to talk to a human banker", ai_response, 'human_agent')
 
         # Also raise the actual support ticket and flip this conversation into
         # human mode, so it shows up in the admin console (Support Tickets /
@@ -1591,50 +1680,10 @@ def emergency():
 
         conn = get_db()
         c    = conn.cursor()
-        c.execute("""
-            INSERT INTO chat_history(account_number, user_message, ai_response, intent, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (account_number, "EMERGENCY - Lock my cards!", ai_response,
-              'emergency', now_pk().isoformat()))
-        conn.commit()
+        _log_chat(conn, account_number, "EMERGENCY - Lock my cards!", ai_response, 'emergency')
         release_db(conn)
 
         return jsonify({'success': True, 'ai_response': ai_response})
-
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/chat/history', methods=['GET'])
-def chat_history():
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    try:
-        account_number = session['account_number']
-        limit          = request.args.get('limit', 20, type=int)
-
-        conn = get_db()
-        c    = conn.cursor()
-        c.execute("""
-            SELECT user_message, ai_response, created_at
-            FROM chat_history
-            WHERE account_number=%s
-            ORDER BY created_at DESC
-            LIMIT %s
-        """, (account_number, limit))
-
-        messages = []
-        for row in c.fetchall():
-            messages.append({
-                'user_message': row['user_message'],
-                'ai_response':  row['ai_response'],
-                'timestamp':    row['created_at']
-            })
-
-        release_db(conn)
-        messages.reverse()
-        return jsonify({'success': True, 'messages': messages})
 
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
