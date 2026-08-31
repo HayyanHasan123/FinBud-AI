@@ -13,20 +13,23 @@ import { useChatController } from './useChatController'
 // before anything is actually triggered.
 export default function ChatMobile() {
   const navigate = useNavigate()
-  const {
+    const {
     messagesEndRef, printRef,
     messages, inputText, setInputText, isLoading,
     voiceState, isVoiceModeActive,
     hasCard, modal, setModal, pendingInfo,
+    sessionId, isReadOnly, sessions,
     speak, toggleVoiceMode, openAdvisor,
     sendMessage, handleHumanHandoff, handleEmergency,
     submitPassword, downloadReceipt, emailReceipt,
+    startNewChat, loadSessions, openSession,
   } = useChatController()
 
   // "+" action sheet: null (closed) -> 'menu' (pick an action) -> 'confirm-human' | 'confirm-emergency'
   const [actionSheet, setActionSheet] = useState(null)
   const sheetRef = useRef(null)
   const plusBtnRef = useRef(null)
+  const [showHistory, setShowHistory] = useState(false)
 
   useEffect(() => {
     if (!actionSheet) return
@@ -264,6 +267,17 @@ export default function ChatMobile() {
 
         html[data-font-size="small"] .message { font-size:13px; }
         html[data-font-size="small"] .m-input-area input { font-size:14px; }
+        .topbar-actions { display:flex; align-items:center; gap:6px; }
+        .topbar-icon-btn { background:none; border:none; color:var(--primary-purple); font-size:16px; cursor:pointer; padding:8px; border-radius:6px; }
+        .chat-closed-badge { background:#6b7280; color:#fff; font-size:10px; font-weight:700; padding:3px 8px; border-radius:10px; letter-spacing:.5px; text-transform:uppercase; }
+        .history-panel { position:absolute; top:56px; right:10px; left:10px; max-height:50vh; overflow-y:auto; background:var(--card); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.15); z-index:20; padding:8px; }
+        .history-item { display:flex; justify-content:space-between; align-items:center; width:100%; text-align:left; background:none; border:none; padding:10px 8px; border-radius:6px; cursor:pointer; }
+        .history-item:hover, .history-item.current { background:var(--secondary-purple); }
+        .history-empty { padding:16px; text-align:center; color:#6b7280; font-size:13px; }
+        .history-preview { font-size:13px; color:var(--text-dark); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70%; }
+        .history-status { font-size:11px; font-weight:700; }
+        .history-status.active { color:#15803d; }
+        .history-status.closed { color:#6b7280; }
       `}</style>
 
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -280,7 +294,30 @@ export default function ChatMobile() {
             <span className="m-logo-circle">AI</span>
             <h1>FinBud Chat</h1>
           </div>
+          <div className="topbar-actions">
+            {isReadOnly && <span className="chat-closed-badge">Closed</span>}
+            <button className="topbar-icon-btn" aria-label="Chat history"
+              onClick={() => { setShowHistory(s => !s); loadSessions() }}>
+              <i className="fas fa-clock-rotate-left" />
+            </button>
+            <button className="topbar-icon-btn" aria-label="New chat" onClick={startNewChat}>
+              <i className="fas fa-plus" />
+            </button>
+          </div>
         </header>
+
+        {showHistory && (
+          <div className="history-panel">
+            {sessions.length === 0 && <p className="history-empty">No past conversations yet.</p>}
+            {sessions.map(s => (
+              <button key={s.id} className={`history-item ${s.id === sessionId ? 'current' : ''}`}
+                onClick={() => { openSession(s.id); setShowHistory(false) }}>
+                <span className="history-preview">{s.preview || '(empty conversation)'}</span>
+                <span className={`history-status ${s.status}`}>{s.status === 'active' ? 'Active' : 'Closed'}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* MESSAGES */}
         <div className="m-messages">
@@ -376,24 +413,26 @@ export default function ChatMobile() {
               type="button"
               className={`m-plus-btn ${actionSheet ? 'open' : ''}`}
               onClick={togglePlus}
+              disabled={isReadOnly}
               aria-label={actionSheet ? 'Close quick actions' : 'Open quick actions'}
               aria-expanded={!!actionSheet}
             >
               +
             </button>
-            <input
+                        <input
               type="text"
-              placeholder="Ask FinBud AI a question..."
+              placeholder={isReadOnly ? 'This conversation is closed' : 'Ask FinBud AI a question...'}
               value={inputText}
               onChange={e => setInputText(e.target.value)}
               onFocus={() => setActionSheet(null)}
-              onKeyDown={e => e.key === 'Enter' && !isLoading && sendMessage()}
-              disabled={isLoading}
+              onKeyDown={e => e.key === 'Enter' && !isLoading && !isReadOnly && sendMessage()}
+              disabled={isLoading || isReadOnly}
               aria-label="Type your message to FinBud AI"
             />
             <button
               className={`m-icon-btn m-mic-btn ${isVoiceModeActive ? voiceState : ''}`}
               onClick={toggleVoiceMode}
+              disabled={isReadOnly}
               aria-label={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
             >
               {voiceState === 'processing' && isVoiceModeActive && <i className="fas fa-spinner fa-spin" />}
@@ -405,7 +444,7 @@ export default function ChatMobile() {
             <button
               className="m-icon-btn m-send-btn"
               onClick={() => sendMessage()}
-              disabled={isLoading}
+              disabled={isLoading || isReadOnly}
               aria-label="Send message"
             >
               <i className="fas fa-paper-plane" />
