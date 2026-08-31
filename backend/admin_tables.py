@@ -142,7 +142,19 @@ def init_admin_tables():
             ALTER TABLE handoff_queue ADD COLUMN IF NOT EXISTS
               assigned_to INTEGER REFERENCES admin_users(id)
         """)
-
+        # ── chat_sessions (New Chat / archived read-only history) ───────────
+        c.execute('''
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id             SERIAL PRIMARY KEY,
+            account_number VARCHAR(30) REFERENCES dashboard_users(account_number),
+            status         VARCHAR(20) DEFAULT 'active',
+            started_at     VARCHAR(64),
+            closed_at      VARCHAR(64)
+        )''')
+        c.execute("""
+            ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS
+              session_id INTEGER REFERENCES chat_sessions(id)
+        """)
         # ── chat_history extra columns (chat_monitor.py) ────────────────────
         c.execute("""
             ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS
