@@ -39,9 +39,13 @@ export function useChatController() {
   const [modal, setModal] = useState(null)
   const [pendingInfo, setPendingInfo] = useState(null)
   const [lastBillType, setLastBillType] = useState(null)
+  const [sessionId, setSessionId] = useState(null)
+  const [isReadOnly, setIsReadOnly] = useState(false)
+  const [sessions, setSessions] = useState([])
 
   useEffect(() => {
     checkCard()
+     loadActiveSession()
     // Module F: Dashboard.jsx sets these on <html> and they persist across
     // client-side navigation, but if a user lands directly on /chat (e.g. a
     // deep link or a fresh tab), apply the saved preference here too.
@@ -67,6 +71,7 @@ export function useChatController() {
       // Always delegates to the CURRENT sendMessage via the ref kept in
       // sync below, instead of closing over this (mount-time) render's
       // sendMessage directly - see sendMessageRef's declaration for why.
+      lang: 'ur-PK',
       onTranscript: (transcript) => { sendMessageRef.current(transcript) },
       onStateChange: (state) => setVoiceState(state),
       onError: (err) => {
@@ -132,6 +137,60 @@ export function useChatController() {
     return res.json()
   }
 
+  function rowsToMessages(rows) {
+    const out = []
+    for (const r of rows) {
+      if (r.user_message) out.push({ text: r.user_message, type: 'user', id: `u-${r.id}` })
+      if (r.ai_response)  out.push({ text: r.ai_response,  type: 'ai',   id: `a-${r.id}` })
+    }
+    return out
+  }
+
+  async function loadActiveSession() {
+    try {
+      const res  = await fetch('/api/chat/history', { credentials: 'include' })
+      const data = await res.json()
+      if (data.success && data.session_id) {
+        setMessages(rowsToMessages(data.messages))
+        setSessionId(data.session_id)
+        setIsReadOnly(!data.is_active)
+      }
+    } catch { /* fall back to blank, same as current behavior */ }
+  }
+
+  async function startNewChat() {
+    try {
+      const res  = await fetch('/api/chat/session/new', { method: 'POST', credentials: 'include' })
+      const data = await res.json()
+      if (data.success) {
+        setMessages([])
+        setSessionId(data.session_id)
+        setIsReadOnly(false)
+        setModal(null)
+        setPendingInfo(null)
+      }
+    } catch { appendMessage('Could not start a new chat. Please try again.', 'ai') }
+  }
+
+  async function loadSessions() {
+    try {
+      const res  = await fetch('/api/chat/sessions', { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) setSessions(data.sessions)
+    } catch {}
+  }
+
+  async function openSession(id) {
+    try {
+      const res  = await fetch(`/api/chat/history?session_id=${id}`, { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) {
+        setMessages(rowsToMessages(data.messages))
+        setSessionId(data.session_id)
+        setIsReadOnly(!data.is_active)
+      }
+    } catch {}
+  }
   async function maybePrefill(data) {
     const bt = data.entities && data.entities.bill_type
     if (!bt || bt === lastBillType) return
@@ -272,6 +331,7 @@ export function useChatController() {
   }
 
   async function sendMessage(text) {
+    if (isReadOnly) return
     const userText = (text || inputText).trim()
     if (!userText) return
 
@@ -304,6 +364,7 @@ export function useChatController() {
   })
 
   async function handleHumanHandoff() {
+    if (isReadOnly) return
     setMessages(prev => prev.filter(m => m.type !== 'welcome'))
     appendMessage('I want to talk to a human banker', 'user')
     setIsLoading(true)
@@ -321,7 +382,7 @@ export function useChatController() {
   }
 
   async function handleEmergency() {
-    if (!hasCard) return
+    if (!hasCard || isReadOnly) return
     setMessages(prev => prev.filter(m => m.type !== 'welcome'))
     appendMessage('EMERGENCY - Lock my cards!', 'user')
     setIsLoading(true)
@@ -383,9 +444,11 @@ export function useChatController() {
     messages, inputText, setInputText, isLoading,
     voiceState, isVoiceModeActive,
     hasCard, modal, setModal, pendingInfo,
+    sessionId, isReadOnly, sessions,
     // actions
     speak, toggleVoiceMode, openAdvisor,
     sendMessage, handleHumanHandoff, handleEmergency,
     submitPassword, downloadReceipt, emailReceipt,
+    startNewChat, loadSessions, openSession,
   }
 }
