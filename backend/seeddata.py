@@ -263,12 +263,19 @@ def run_seed(account_number, database_url=None):
         if i in EDU:
             debit(i, 5, EDU[i], "Certification course fee", "Education", hour=10)
 
+        # NOTE: reference numbers must be digits-only to match the new
+        # numeric-only bill_reference validation (extract_bill_reference()
+        # in nlp_module.py) and the Dashboard's PayBillStep3 "saved
+        # reference" quick-fill button, which sends this value straight
+        # back through that same validation. Previously these used
+        # letter-prefixed refs ("KE-{i}", "SSGC-{i}") which would fail the
+        # new check if a user clicked "Yes" on a legacy saved ref.
         bill_rows.append((ACCOUNT, "K-Electric", KE[i], dt_capped(i, 10)[:10], "paid",
-                           dt_capped(i, 5)[:10], f"KE-{i}", dt_capped(i, 1)))
+                           dt_capped(i, 5)[:10], f"1100{i:03d}", dt_capped(i, 1)))
         paid_day = 20 if i == LATE_PAYMENT_MONTH else 8
         paid_on = dt_capped(i, paid_day)[:10]
         bill_rows.append((ACCOUNT, "SSGC", SSGC[i], dt_capped(i, 12)[:10], "paid",
-                           paid_on, f"SSGC-{i}", dt_capped(i, 1)))
+                           paid_on, f"2200{i:03d}", dt_capped(i, 1)))
 
         debit(i, 10, FUEL[i], "Shell petrol", "Car & Fuel", hour=8)
         debit(i, 14, DINING[i], "Dinner - restaurant", "Entertainment", hour=20)

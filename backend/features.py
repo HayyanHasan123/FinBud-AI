@@ -729,6 +729,23 @@ def lock_all_cards(account):
     return True
 
 
+def lock_single_card(account, card_id):
+    """Locks exactly one card, verifying it belongs to `account` first.
+
+    Returns True iff a row was actually updated (i.e. the card exists and
+    belongs to this account) — callers should treat a False return as
+    "nothing was locked" rather than assuming success.
+    """
+    conn = get_pg_conn(); c = conn.cursor()
+    c.execute(
+        "UPDATE cards SET status='locked' WHERE id=%s AND account_number=%s",
+        (card_id, account)
+    )
+    affected = c.rowcount
+    conn.commit(); release_pg_conn(conn)
+    return affected > 0
+
+
 def alert_fraud_team(account, message):
     conn = get_pg_conn(); c = conn.cursor()
     c.execute(

@@ -95,6 +95,11 @@ SYSTEM_PROMPT = """You are a backend parser for FinBud AI, a multilingual Pakist
 
 The chatbot supports English, Urdu, and Roman Urdu (Urdu written in Latin script).
 
+This app serves Pakistan ONLY. Never use the ₹ (Indian Rupee) symbol or refer to
+India/Indian Rupees under any circumstance. Always denote currency as "Rs" or "PKR"
+(e.g. "Rs 5,000" or "PKR 5,000"). Do not generate content related to any other
+country's currency or financial systems.
+
 Your ONLY job is to parse user messages and return a JSON object.
 Do NOT write any explanation. Do NOT include markdown. Return raw JSON only.
 
@@ -148,6 +153,7 @@ RULES:
 5. For bill_type: map all variants (bijli/bijlee/electricity → electricity, pani/paani → water, etc.)
 6. For conversational_reply: ONLY populate this when intent is "general_chat".
    Write the reply in the SAME language the user used (English / Urdu / Roman Urdu).
+   Keep the tone warm and friendly, like a helpful human assistant, not stiff or robotic.
 7. If a field is not present in the user message, set it to null.
 8. NEVER set intent to a payment/transfer action based on ambiguous input.
    When in doubt, prefer "unknown" over a financial intent.
@@ -447,3 +453,76 @@ def apply_confidence_gate(llm_result: dict) -> dict:
         llm_result['intent'] = 'unknown'
 
     return llm_result
+
+
+# ── Urdu-script → Roman Urdu transliteration ───────────────────────────────
+#
+# Used by the voice pipeline: browsers' native Web Speech STT can only
+# return native-script Urdu transcripts (there's no "ur-Latn-PK" locale
+# supported anywhere), but this app's NLP layer (detect_language() /
+# SLANG_MAPPING in nlp_module.py) is built around Roman Urdu. This function
+# converts the STT output before it's sent to the chat pipeline.
+#
+# IMPORTANT: this is a phonetic TRANSLITERATION, never a translation.
+# "میرا بیلنس کیا ہے" must become "mera balance kya hai", never an English
+# paraphrase like "what is my balance".
+
+TRANSLITERATION_SYSTEM_PROMPT = """You are a phonetic transliteration engine for a Pakistani banking chatbot.
+
+Your ONLY job: convert Urdu-script text into Roman Urdu (Urdu written in Latin/English letters), preserving the original meaning and word order EXACTLY.
+
+Rules:
+1. This is TRANSLITERATION, not translation. Do not paraphrase, summarize, or change meaning. Every word must be converted phonetically, not swapped for an English equivalent.
+2. Preserve all numbers, amounts, phone numbers, and account/reference numbers EXACTLY as digits - never spell them out or alter them.
+3. Match these house spelling conventions (used throughout this app) wherever the word appears:
+   aap, main, hai, hain, hoon, kya, bhejo, bhejdo, bhejna, kitna, kitne,
+   mera, meri, mere, mujhe, karo, karna, kardo, karein, batao, chahiye,
+   bijli, pani, paisa, paise, rupay, rupaye, khata, theek, sahi, galat,
+   nahi, haan, ji, shukriya, salam.
+4. Output ONLY the transliterated Roman Urdu text. No quotes, no explanation, no preamble, no markdown.
+5. If the input contains a mix of Urdu script and already-Latin text (e.g. an English word or a number), keep the Latin/numeric parts unchanged and only transliterate the Urdu-script parts.
+
+Respond with the transliterated text and nothing else."""
+
+
+def transliterate_urdu_to_roman(
+    urdu_text: str,
+    api_key: str = None,
+    model: str = "openai/gpt-oss-120b",
+) -> Optional[str]:
+    """Transliterate Urdu-script text to Roman Urdu using the LLM.
+
+    Must NOT translate meaning — phonetic transliteration only, matching
+    the Roman Urdu conventions already used elsewhere in this app (see
+    roman_words / SLANG_MAPPING in nlp_module.py for the house spelling
+    conventions, e.g. 'theek' not 'thik', 'bhejo' not 'bhejjo').
+
+    Returns None (rather than raising) on any failure, so callers — the
+    voice pipeline in particular — can fall back to the raw Urdu-script
+    transcript instead of blocking the conversation.
+    """
+    if not urdu_text or not urdu_text.strip():
+        return None
+
+    if not GROQ_AVAILABLE:
+        logger.warning("Transliteration skipped: groq package not installed.")
+        return None
+
+    try:
+        client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": TRANSLITERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": urdu_text},
+            ],
+            temperature=0.0,
+            max_tokens=200,
+        )
+        result = response.choices[0].message.content
+        if result:
+            return result.strip()
+        return None
+    except Exception as exc:
+        logger.error("Urdu transliteration call failed: %s", exc)
+        return None

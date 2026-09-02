@@ -74,6 +74,7 @@ class FlowState(Enum):
     REDEEM_AWAIT_CHOICE = auto()
     REDEEM_AWAIT_PASSWORD = auto()
     EMERGENCY_AWAIT_PASSWORD = auto()
+    EMERGENCY_AWAIT_CARD_SELECTION = auto()
 
 
 # Map FlowState -> the legacy `current_flow` string app.py already persists
@@ -108,7 +109,7 @@ FLOW_SLOT_ORDER = {
         # side-effect of filling 'transfer_identifier', and injected
         # straight into ctx['recipient'] at that point.
         'transfer_method', 'transfer_identifier',
-        'amount', 'purpose', 'description',
+        'amount', 'description',
     ],
     'pay_bill': ['bill_category', 'service_provider', 'bill_reference', 'amount'],
 }
@@ -127,7 +128,11 @@ FLOW_SLOT_STATE = {
     ('transfer_money', 'transfer_method'): FlowState.TRANSFER_AWAIT_METHOD,
     ('transfer_money', 'transfer_identifier'): FlowState.TRANSFER_AWAIT_IDENTIFIER,
     ('transfer_money', 'amount'): FlowState.TRANSFER_AWAIT_AMOUNT,
-    ('transfer_money', 'purpose'): FlowState.TRANSFER_AWAIT_PURPOSE,
+    # 'purpose' intentionally removed from the flow (no longer a collected
+    # slot - see FLOW_SLOT_ORDER['transfer_money']); ctx['purpose'] is now
+    # silently defaulted to 'Personal' instead of asked for. The
+    # FlowState.TRANSFER_AWAIT_PURPOSE enum value itself is left defined
+    # (unused) so nothing else that pattern-matches on the Enum breaks.
     ('transfer_money', 'description'): FlowState.TRANSFER_AWAIT_DESCRIPTION,
     ('pay_bill', 'bill_category'): FlowState.BILL_AWAIT_CATEGORY,
     ('pay_bill', 'service_provider'): FlowState.BILL_AWAIT_PROVIDER,
@@ -306,13 +311,21 @@ INTENT_PATTERNS = {
         r'\b(theft|stolen|lost)\b',
         r'\bcard\s*(theft|stolen|lost|block|lock)\b',
         r'\b(block|lock)\s*(my\s*)?card\b',
+        # Plural / "all"-in-between phrasing (e.g. "lock all my cards",
+        # "block all cards") — the singular-only patterns above don't
+        # cover this, and it needs to still be recognised as a (now
+        # multi-card) emergency intent, not just as the separate
+        # EMERGENCY_ALL_CARDS_PATTERNS all-cards flag.
+        r'\b(block|lock|band)\s*(all\s*)?(my\s*)?cards\b',
+        r'\bsaare\s*cards?\s*(block|lock|band)',
+        r'\bsab\s*cards?\s*(block|lock|band)',
         # Urdu script
         r'کارڈ\s*(بلاک|لاک|بند)\s*(کر[وؤ])?',
+        r'(تمام|سارے)\s*کارڈز\s*(بلاک|لاک|بند)',
         r'(کارڈ\s*چوری|کارڈ\s*گم)',
         r'(ایمرجنسی|فوری)',
         r'غیر\s*مجاز\s*(ٹرانزیکشن|لین\s*دین)',
     ],
-
     # ── human_agent ──────────────────────────────────────────────────────────
     'human_agent': [
         # Original Roman Urdu words
@@ -326,6 +339,23 @@ INTENT_PATTERNS = {
         r'کسی\s*سے\s*بات',
     ],
 }
+
+# Explicit "lock ALL my cards" phrasing - a deliberate power-user path that
+# stays available even once the account has 2+ cards (in which case the
+# generic 'emergency' patterns above trigger the "which card?" selection
+# step instead). Checked separately from INTENT_PATTERNS['emergency'] so
+# the all-cards path can be detected without changing what counts as an
+# emergency intent in the first place.
+EMERGENCY_ALL_CARDS_PATTERNS = [
+    r'\ball\s*(of\s*)?my\s*cards\b',
+    r'\ball\s*cards\b',
+    r'\bsaare\s*cards\b',
+    r'\bsab\s*cards\b',
+    r'\bharek\s*card\b',
+    # Urdu script
+    r'تمام\s*کارڈز',
+    r'سارے\s*کارڈز',
+]
 
 # Global cancel patterns - checked on every turn, regardless of
 # active flow, before any slot extraction happens.
@@ -377,13 +407,21 @@ HELP_PATTERNS = [
 # Affirmative / negative responses for the confirmation step.
 AFFIRMATIVE_PATTERNS = [
     r'^\s*yes\s*$', r'^\s*y\s*$', r'^\s*yeah\s*$', r'^\s*yep\s*$',
-    r'^\s*confirm(ed)?\s*$', r'^\s*ok(ay)?\s*$', r'^\s*haan\s*ji?\s*$',
-    r'^\s*ji\s*haan\s*$', r'^\s*g\s*$', r'^\s*sahi\s*hai\s*$',
+    r'^\s*confirm(ed)?\s*$', r'^\s*ok(ay)?\s*$', r'^\s*haan\s*(ji)?\s*$',
+    r'^\s*ji\s*haan\s*$', r'^\s*ji\s*$', r'^\s*g\s*$', r'^\s*sahi\s*hai\s*$',
     r'^\s*theek\s*hai\s*$', r'^\s*proceed\s*$',
+    # Urdu script equivalents (glyph forms match existing RESPONSES strings
+    # in this file, e.g. line ~530/595's "بالکل"/"ٹھیک ہے").
+    r'^\s*ہاں\s*(جی)?\s*$', r'^\s*جی\s*ہاں\s*(بالکل)?\s*$', r'^\s*جی\s*$',
+    r'^\s*ٹھیک\s*(ہے)?\s*$', r'^\s*بالکل\s*$',
+    r'^\s*درست\s*(ہے)?\s*$', r'^\s*صحیح\s*(ہے)?\s*$',
 ]
 NEGATIVE_PATTERNS = [
     r'^\s*no\s*$', r'^\s*n\s*$', r'^\s*nah\s*$', r'^\s*nahi\s*n?\s*$',
     r'^\s*nope\s*$', r'^\s*cancel\s*$', r'^\s*galat\s*$',
+    # Urdu script equivalents.
+    r'^\s*نہیں\s*(جی)?\s*$', r'^\s*جی\s*نہیں\s*$', r'^\s*نہ\s*$',
+    r'^\s*غلط\s*$', r'^\s*منسوخ\s*$', r'^\s*کینسل\s*$', r'^\s*رک\s*جاؤ\s*$',
 ]
 
 # ── SLANG_MAPPING ─────────────────────────────────────────────────────────
@@ -507,9 +545,9 @@ SLANG_MAPPING = {
 
 RESPONSES = {
     'greeting': {
-        'en': "Hello! I'm FinBud AI!. How can I help you today?",
+        'en': "Hi there! I'm FinBud AI — happy to help. What can I do for you today?",
         'ur': "السلام علیکم! میں FinBud AI ہوں۔ میں آپ کی کیسے مدد کر سکتا ہوں؟",
-        'ru': "Assalam-o-Alaikum! Main FinBud AI! hoon. Aap ki kaise madad kar sakta hoon?"
+        'ru': "Assalam-o-Alaikum! Main FinBud AI hoon, aapki khidmat mein hazir hoon. Aaj main aapki kaise madad kar sakta hoon?"
     },
     'unknown': {
         'en': "I didn't understand that. Try:\n• Check balance\n• Send money\n• Pay bills",
@@ -522,69 +560,74 @@ RESPONSES = {
         'ru': "Aap ka balance RS {balance:,} hai"
     },
     'transfer_ask_method': {
-        'en': "How would you like to send the money? Please choose: IBAN, Account Number, or Raast ID.",
-        'ur': "🏦 آپ کس طریقے سے پیسے بھیجنا چاہتے ہیں؟ IBAN، Account Number، یا Raast ID میں سے چنیں۔",
-        'ru': "🏦 Aap kis tareeqe se paisa bhejna chahte hain? IBAN, Account Number, ya Raast ID mein se chunein."
+        'en': "Sure thing! How would you like to send the money — IBAN, Account Number, or Raast ID?",
+        'ur': "🏦 بالکل! آپ کس طریقے سے پیسے بھیجنا چاہتے ہیں؟ IBAN، Account Number، یا Raast ID میں سے چنیں۔",
+        'ru': "🏦 Bilkul! Aap kis tareeqe se paisa bhejna chahenge — IBAN, Account Number, ya Raast ID?"
     },
     'transfer_method_invalid': {
-        'en': "❌ Sorry, I didn't recognize that. Please reply with one of: IBAN, Account Number, or Raast ID.",
+        'en': "❌ Sorry, I didn't quite catch that. Could you reply with one of: IBAN, Account Number, or Raast ID?",
         'ur': "❌ معذرت، یہ سمجھ نہیں آیا۔ براۓ کرم ان میں سے کوئی ایک لکھیں: IBAN، Account Number، یا Raast ID۔",
-        'ru': "❌ Maaf karein, yeh samajh nahi aaya. In mein se koi ek likhein: IBAN, Account Number, ya Raast ID."
+        'ru': "❌ Maaf karein, yeh samajh nahi aaya. In mein se koi ek batayein: IBAN, Account Number, ya Raast ID."
     },
     'transfer_ask_identifier': {
-        'en': "📱 Please enter the recipient's registered phone number (e.g. 03XXXXXXXXX). We'll look up their FinBud-AI account automatically.",
-        'ur': "📱 براۓ کرم وصول کنندہ کا رجسٹرڈ فون نمبر درج کریں (مثلاً 03XXXXXXXXX)۔ ہم خودکار طور پر ان کا FinBud-AI اکاؤنٹ تلاش کریں گے۔",
-        'ru': "📱 Recipient ka registered phone number enter karein (e.g. 03XXXXXXXXX). Hum unka FinBud-AI account automatically dhoond lenge."
+        'en': "📱 Great — what's the recipient's registered phone number (e.g. 03XXXXXXXXX)? We'll look up their FinBud-AI account automatically.",
+        'ur': "📱 بہت خوب — وصول کنندہ کا رجسٹرڈ فون نمبر بتائیں (مثلاً 03XXXXXXXXX)۔ ہم خودکار طور پر ان کا FinBud-AI اکاؤنٹ تلاش کر لیں گے۔",
+        'ru': "📱 Behtareen — recipient ka registered phone number kya hai (e.g. 03XXXXXXXXX)? Hum unka FinBud-AI account khud dhoond lenge."
     },
     'transfer_invalid_identifier': {
-        'en': "❌ That doesn't look like a valid Pakistani phone number. Please enter it as 03XXXXXXXXX or +923XXXXXXXXX.",
+        'en': "❌ Hmm, that doesn't look like a valid Pakistani phone number. Please try entering it as 03XXXXXXXXX or +923XXXXXXXXX.",
         'ur': "❌ یہ درست پاکستانی فون نمبر نہیں لگتا۔ براۓ کرم 03XXXXXXXXX یا +923XXXXXXXXX کی صورت میں درج کریں۔",
-        'ru': "❌ Yeh valid Pakistani phone number nahi lagta. Isay 03XXXXXXXXX ya +923XXXXXXXXX ki soorat mein darj karein."
+        'ru': "❌ Yeh sahi Pakistani phone number nahi lag raha. Zara 03XXXXXXXXX ya +923XXXXXXXXX ki soorat mein dobara try karein."
     },
     'transfer_ask_identifier_iban': {
-        'en': "🏦 Please enter the recipient's IBAN. A Pakistani IBAN is 24 characters: 'PK' + 2 digits + 4-letter bank code + 16 digits (e.g. PK36SCBL0000001123456702).",
-        'ur': "🏦 براۓ کرم وصول کنندہ کا IBAN درج کریں۔ پاکستانی IBAN 24 حروف کا ہوتا ہے: 'PK' + 2 ہندسے + بینک کوڈ + 16 ہندسے (مثلاً PK36SCBL0000001123456702)۔",
-        'ru': "🏦 Recipient ka IBAN enter karein. Pakistani IBAN 24 characters ka hota hai: 'PK' + 2 digits + bank code + 16 digits (e.g. PK36SCBL0000001123456702)."
+        'en': "🏦 Please share the recipient's IBAN. A Pakistani IBAN is 24 characters: 'PK' + 2 digits + 4-letter bank code + 16 digits (e.g. PK36SCBL0000001123456702).",
+        'ur': "🏦 براۓ کرم وصول کنندہ کا IBAN بتائیں۔ پاکستانی IBAN 24 حروف کا ہوتا ہے: 'PK' + 2 ہندسے + بینک کوڈ + 16 ہندسے (مثلاً PK36SCBL0000001123456702)۔",
+        'ru': "🏦 Recipient ka IBAN share karein. Pakistani IBAN 24 characters ka hota hai: 'PK' + 2 digits + bank code + 16 digits (e.g. PK36SCBL0000001123456702)."
     },
     'transfer_invalid_identifier_iban': {
-        'en': "❌ That doesn't look like a valid IBAN. A Pakistani IBAN is 24 characters: 'PK' + 2 digits + 4-letter bank code + 16 digits (e.g. PK36SCBL0000001123456702).",
+        'en': "❌ That doesn't quite look like a valid IBAN. A Pakistani IBAN is 24 characters: 'PK' + 2 digits + 4-letter bank code + 16 digits (e.g. PK36SCBL0000001123456702).",
         'ur': "❌ یہ درست IBAN نہیں لگتا۔ پاکستانی IBAN 24 حروف کا ہوتا ہے: 'PK' + 2 ہندسے + بینک کوڈ + 16 ہندسے (مثلاً PK36SCBL0000001123456702)۔",
-        'ru': "❌ Yeh valid IBAN nahi lagta. Pakistani IBAN 24 characters ka hota hai: 'PK' + 2 digits + bank code + 16 digits (e.g. PK36SCBL0000001123456702)."
+        'ru': "❌ Yeh sahi IBAN nahi lag raha. Pakistani IBAN 24 characters ka hota hai: 'PK' + 2 digits + bank code + 16 digits (e.g. PK36SCBL0000001123456702)."
     },
     'transfer_ask_identifier_account': {
-        'en': "🏦 Please enter the recipient's account number (8-16 digits, numbers only).",
-        'ur': "🏦 براۓ کرم وصول کنندہ کا اکاؤنٹ نمبر درج کریں (8-16 ہندسے، صرف نمبر)۔",
-        'ru': "🏦 Recipient ka account number enter karein (8-16 digits, sirf numbers)."
+        'en': "🏦 What's the recipient's account number? (8-16 digits, numbers only)",
+        'ur': "🏦 وصول کنندہ کا اکاؤنٹ نمبر بتائیں (8-16 ہندسے، صرف نمبر)۔",
+        'ru': "🏦 Recipient ka account number kya hai? (8-16 digits, sirf numbers)"
     },
     'transfer_invalid_identifier_account': {
-        'en': "❌ That doesn't look like a valid account number. Please enter 8-16 digits only.",
+        'en': "❌ That doesn't look like a valid account number. Could you enter 8-16 digits only?",
         'ur': "❌ یہ درست اکاؤنٹ نمبر نہیں لگتا۔ براۓ کرم صرف 8-16 ہندسے درج کریں۔",
-        'ru': "❌ Yeh valid account number nahi lagta. Sirf 8-16 digits darj karein."
+        'ru': "❌ Yeh sahi account number nahi lag raha. Sirf 8-16 digits darj karein."
     },
     'transfer_recipient_found': {
-        'en': "✅ We found a FinBud-AI account for {name}. Send this transfer to {name}? (yes/no)",
-        'ur': "✅ ہمیں \u2066{name}\u2069 کا FinBud-AI اکاؤنٹ مل گیا ہے۔ کیا یہ ٹرانسفر \u2066{name}\u2069 کو بھیجنا ہے؟ (yes/no)",
-        'ru': "✅ Humein {name} ka FinBud-AI account mil gaya hai. Kya yeh transfer {name} ko bhejna hai? (yes/no)"
+        'en': "✅ Found it! There's a FinBud-AI account for {name}. Should we send this transfer to {name}? (yes/no)",
+        'ur': "✅ مل گیا! \u2066{name}\u2069 کا FinBud-AI اکاؤنٹ موجود ہے۔ کیا یہ ٹرانسفر \u2066{name}\u2069 کو بھیجیں؟ (yes/no)",
+        'ru': "✅ Mil gaya! {name} ka FinBud-AI account mojood hai. Kya yeh transfer {name} ko bhejein? (yes/no)"
     },
     'transfer_ask_recipient_name': {
-        'en': "👤 We can't verify this account automatically since it's outside FinBud-AI. Please type the recipient's full name so we can include it on the transfer.",
+        'en': "👤 This account is outside FinBud-AI, so we can't verify it automatically. Could you type the recipient's full name for the transfer?",
         'ur': "👤 چونکہ یہ اکاؤنٹ FinBud-AI کے باہر کا ہے، ہم خودکار طور پر تصدیق نہیں کر سکتے۔ براۓ کرم وصول کنندہ کا پورا نام لکھیں۔",
-        'ru': "👤 Yeh account FinBud-AI ke bahar ka hai, is liye hum automatically verify nahi kar sakte. Recipient ka pura naam likhein."
+        'ru': "👤 Yeh account FinBud-AI ke bahar ka hai, is liye hum automatically verify nahi kar sakte. Recipient ka pura naam bata dein."
     },
     'transfer_phone_not_found': {
-        'en': "❌ No registered FinBud-AI account was found associated with this phone number. Please check the number and try again.",
+        'en': "❌ We couldn't find a registered FinBud-AI account for this phone number. Please double-check it and try again.",
         'ur': "❌ اس فون نمبر سے منسلک کوئی رجسٹرڈ FinBud-AI اکاؤنٹ نہیں ملا۔ براۓ کرم نمبر چیک کریں اور دوبارہ کوشش کریں۔",
-        'ru': "❌ Is phone number se koi registered FinBud-AI account nahi mila. Number check karke dobara koshish karein."
+        'ru': "❌ Is phone number se koi registered FinBud-AI account nahi mila. Number dobara check karke try karein."
     },
     'transfer_identifier_wrong_format': {
-        'en': "❌ That doesn't look like a valid {transfer_method}. Please enter it in the correct format for {transfer_method}.",
+        'en': "❌ That doesn't look like a valid {transfer_method}. Could you enter it in the correct format for {transfer_method}?",
         'ur': "❌ یہ درست \u2066{transfer_method}\u2069 نہیں لگتا۔ براۓ کرم \u2066{transfer_method}\u2069 کے درست فارمیٹ میں درج کریں۔",
-        'ru': "❌ Yeh valid {transfer_method} nahi lagta. Correct format mein {transfer_method} enter karein."
+        'ru': "❌ Yeh sahi {transfer_method} nahi lag raha. Correct format mein {transfer_method} enter karein."
+    },
+    'transfer_account_not_found': {
+        'en': "❌ That account number doesn't seem to be coming up — could you double-check it and enter it again?",
+        'ur': "❌ یہ اکاؤنٹ نمبر درست نہیں لگتا — ہمیں یہ نہیں ملا۔ براۓ کرم دوبارہ چیک کر کے درج کریں۔",
+        'ru': "❌ Yeh account number theek nahi mil raha — zara dobara check karke enter karein."
     },
     'transfer_ask_amount': {
-        'en': "How much would you like to transfer to {recipient}?",
-        'ur': "💰 \u200Fآپ \u2066{recipient}\u2069 کو کتنی رقم منتقل کرنا چاہتے ہیں؟",
-        'ru': "Aap {recipient} ko kitni raqam transfer karna chahte hain?"
+        'en': "Got it! How much would you like to send to {recipient}?",
+        'ur': "💰 \u200Fٹھیک ہے! آپ \u2066{recipient}\u2069 کو کتنی رقم بھیجنا چاہتے ہیں؟",
+        'ru': "Theek hai! Aap {recipient} ko kitni raqam bhejna chahenge?"
     },
     'transfer_ask_purpose': {
         'en': "What's the purpose of this transfer? (Rent, Salary, Business, Personal, or Other)",
@@ -592,59 +635,64 @@ RESPONSES = {
         'ru': "Is transfer ka purpose kya hai? (Rent, Salary, Business, Personal, ya Other)"
     },
     'transfer_ask_description': {
-        'en': "Any specific category for this transfer (e.g. Grocery, Rent, Utility Bills)? You can also just say \"skip\" to use \"Transfer\".",
+        'en': "Almost done! Want to tag this transfer with a category (e.g. Grocery, Rent, Utility Bills)? Just say \"skip\" and we'll file it as \"Transfer\".",
         'ur': "کیا اس ٹرانسفر کے لیے کوئی مخصوص کیٹیگری ہے؟ چھوڑنے کے لیے \"skip\" لکھیں۔",
-        'ru': "Is transfer ke liye koi specific category hai (maslan Grocery, Rent)? Skip karne ke liye \"skip\" likhein."
+        'ru': "Bus thodi der aur! Is transfer ko koi category dena chahenge (maslan Grocery, Rent)? Chhorne ke liye bas \"skip\" likh dein."
     },
     'transfer_confirm': {
-        'en': "Confirm: sending RS {amount:,} to {recipient} via {transfer_method} ({transfer_identifier}) for {purpose} [{description}] — yes/no?",
+        'en': "Alright, here's what I've got: sending RS {amount:,} to {recipient} via {transfer_method} ({transfer_identifier}) for {purpose} [{description}]. Shall I go ahead? (yes/no)",
         'ur': "\u200Fتصدیق کریں: \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو \u2066{transfer_method}\u2069 (\u2066{transfer_identifier}\u2069) کے ذریعے، \u2066{purpose}\u2069 [\u2066{description}\u2069] کے لیے بھیجنا ہے — yes/no؟",
-        'ru': "Confirm karein: RS {amount:,} {recipient} ko {transfer_method} ({transfer_identifier}) ke zariye, {purpose} [{description}] ke liye bhejna hai — yes/no?"
+        'ru': "Theek hai, yeh raha summary: RS {amount:,} {recipient} ko {transfer_method} ({transfer_identifier}) ke zariye, {purpose} [{description}] ke liye. Aage badhein? (yes/no)"
     },
     'transfer_password_request': {
-        'en': "🔒 Please enter your password to confirm the transfer of RS {amount:,} to {recipient}.",
+        'en': "🔒 Almost there! Please enter your password to confirm sending RS {amount:,} to {recipient}.",
         'ur': "🔒 \u200Fبراۓ کرم اپنا پاس ورڈ درج کریں تاکہ \u2066{recipient}\u2069 کو \u2066RS {amount:,}\u2069 کی منتقلی کی تصدیق ہو سکے۔",
-        'ru': "🔒 Apna password enter karein taake {recipient} ko RS {amount:,} ki transfer confirm ho sake."
+        'ru': "🔒 Bas ek aakhri kadam! Apna password enter karein taake {recipient} ko RS {amount:,} ki transfer confirm ho sake."
     },
     'transfer_success': {
-        'en': "✅ Transfer successful! RS {amount:,} sent to {recipient}.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
+        'en': "✅ All done! RS {amount:,} sent to {recipient}.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
         'ur': "✅ \u200Fٹرانسفر کامیاب! \u2066RS {amount:,}\u2069 \u2066{recipient}\u2069 کو بھیجا گیا۔\n💰 \u200Fنیا بیلنس: \u2066RS {balance:,}\u2069\n⭐ \u200Fآپ نے \u2066{points}\u2069 انعامی پوائنٹس حاصل کیے!",
-        'ru': "✅ Transfer kamyab! RS {amount:,} {recipient} ko bheja gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
+        'ru': "✅ Ho gaya! RS {amount:,} {recipient} ko bheja gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
     },
     'bill_ask_category': {
-        'en': "Which bill would you like to pay?\n• Electricity\n• Gas\n• Internet",
+        'en': "Sure! Which bill would you like to pay?\n• Electricity\n• Gas\n• Internet",
         'ur': "📋 آپ کون سا بل ادا کرنا چاہتے ہیں؟\n• بجلی\n• گیس\n• انٹرنیٹ",
-        'ru': "Aap konsa bill ada karna chahte hain?\n• Electricity\n• Gas\n• Internet"
+        'ru': "Bilkul! Aap konsa bill pay karna chahenge?\n• Electricity\n• Gas\n• Internet"
     },
     'bill_ask_provider': {
-        'en': "Which provider - {provider_hint}?",
+        'en': "Which provider would that be — {provider_hint}?",
         'ur': "🏢 کون سا پرووائیڈر - {provider_hint}؟",
-        'ru': "Konsa provider - {provider_hint}?"
+        'ru': "Konsa provider hoga — {provider_hint}?"
     },
     'bill_ask_reference': {
-        'en': " Please provide your {bill_category} bill reference number.",
-        'ur': "🔢 براۓ کرم اپنا {bill_category} بل ریفرنس نمبر فراہم کریں۔",
-        'ru': " Apna {bill_category} ka bill reference number provide karein."
+        'en': "Great, could you share your {bill_category} bill reference number? (digits only)",
+        'ur': "🔢 براۓ کرم اپنا {bill_category} بل ریفرنس نمبر فراہم کریں (صرف نمبر)۔",
+        'ru': "Theek hai, apna {bill_category} ka bill reference number bata dein (sirf numbers)."
+    },
+    'bill_reference_invalid': {
+        'en': "❌ That doesn't look like a valid reference number. Please enter digits only (found on your bill statement).",
+        'ur': "❌ یہ درست ریفرنس نمبر نہیں لگتا۔ براۓ کرم صرف نمبر درج کریں (جو آپ کے بل سٹیٹمنٹ پر موجود ہے)۔",
+        'ru': "❌ Yeh sahi reference number nahi lagta. Sirf numbers (digits) mein likhein, jo aapke bill statement par hota hai."
     },
     'bill_ask_amount': {
-        'en': "How much is your {bill_category} bill amount?",
+        'en': "And how much is the {bill_category} bill for?",
         'ur': "💵 آپ کا {bill_category} بل کتنا ہے؟",
-        'ru': "Aap ka {bill_category} bill kitna hai?"
+        'ru': "Aur {bill_category} bill kitna hai?"
     },
     'bill_confirm': {
-        'en': "Confirm: paying RS {amount:,} to {service_provider} for your {bill_category} bill (ref {bill_reference}) — yes/no?",
+        'en': "Here's the summary: paying RS {amount:,} to {service_provider} for your {bill_category} bill (ref {bill_reference}). Good to go? (yes/no)",
         'ur': "تصدیق کریں: \u2066{service_provider}\u2069 کو {bill_category} بل (ریف \u2066{bill_reference}\u2069) کے لیے \u2066RS {amount:,}\u2069 ادا کرنا ہے — yes/no؟",
-        'ru': "Confirm karein: {service_provider} ko {bill_category} bill (ref {bill_reference}) ke liye RS {amount:,} pay karna hai — yes/no?"
+        'ru': "Yeh raha summary: {service_provider} ko {bill_category} bill (ref {bill_reference}) ke liye RS {amount:,} pay karna hai. Theek hai? (yes/no)"
     },
     'bill_payment_password_request': {
-        'en': "🔒 Please enter your password to confirm the {bill_category} bill payment of RS {amount:,} to {service_provider}.",
+        'en': "🔒 Just your password left! Please enter it to confirm the {bill_category} bill payment of RS {amount:,} to {service_provider}.",
         'ur': "🔒 براۓ کرم اپنا پاس ورڈ درج کریں تاکہ \u2066{service_provider}\u2069 کو {bill_category} بل \u2066RS {amount:,}\u2069 کی ادائیگی کی تصدیق ہو سکے۔",
-        'ru': "🔒 Apna password enter karein taake {service_provider} ko {bill_category} bill RS {amount:,} ki payment confirm ho sake."
+        'ru': "🔒 Bas password reh gaya hai! Apna password enter karein taake {service_provider} ko {bill_category} bill RS {amount:,} ki payment confirm ho sake."
     },
     'bill_payment_success': {
-        'en': "✅ Bill payment successful! {bill_type} bill of RS {amount:,} paid.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
+        'en': "✅ All set! {bill_type} bill of RS {amount:,} paid.\n💰 New balance: RS {balance:,}\n⭐ You earned {points} reward points!",
         'ur': "✅ بل ادائیگی کامیاب! {bill_type} بل \u2066RS {amount:,}\u2069 ادا کیا گیا۔\n💰 نیا بیلنس: \u2066RS {balance:,}\u2069\n⭐ آپ نے \u2066{points}\u2069 انعامی پوائنٹس حاصل کیے!",
-        'ru': "✅ Bill payment kamyab! {bill_type} bill RS {amount:,} ada kiya gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
+        'ru': "✅ Ho gaya! {bill_type} bill RS {amount:,} ada kiya gaya.\n💰 Naya balance: RS {balance:,}\n⭐ Aap ne {points} reward points hasil kiye!"
     },
     'check_rewards': {
         'en': "You have {points} reward points",
@@ -696,6 +744,26 @@ RESPONSES = {
         'ur': "🚨 ایمرجنسی فعال: تمام کارڈز اب بند ہیں۔ فراڈ ٹیم کو الرٹ کر دیا گیا ہے۔ براۓ کرم کسٹمر سپورٹ کو کال کریں۔",
         'ru': "🚨 EMERGENCY ACTIVATED: Saare cards ab locked hain. Fraud team ko alert kar diya gaya hai. Customer support ko call karein."
     },
+    'emergency_confirm_card': {
+        'en': "🚨 EMERGENCY ACTIVATED: Your card ending {card} is now locked. Fraud team has been alerted. Please call customer support to verify your identity.",
+        'ur': "🚨 ایمرجنسی فعال: آپ کا کارڈ (آخری ہندسے \u2066{card}\u2069) اب بند ہے۔ فراڈ ٹیم کو الرٹ کر دیا گیا ہے۔ براۓ کرم کسٹمر سپورٹ کو کال کریں۔",
+        'ru': "🚨 EMERGENCY ACTIVATED: Aap ka card (aakhri digits {card}) ab locked hai. Fraud team ko alert kar diya gaya hai. Customer support ko call karein."
+    },
+    'emergency_no_cards_registered': {
+        'en': "You don't have any cards linked to your account yet, so there's nothing to lock. If you believe your account has been compromised, please contact customer support directly.",
+        'ur': "آپ کے اکاؤنٹ کے ساتھ ابھی کوئی کارڈ منسلک نہیں ہے، اس لیے بند کرنے کے لیے کچھ نہیں ہے۔ اگر آپ کو لگتا ہے کہ آپ کا اکاؤنٹ خطرے میں ہے تو براۓ کرم براہ راست کسٹمر سپورٹ سے رابطہ کریں۔",
+        'ru': "Aap ke account se abhi koi card linked nahi hai, is liye lock karne ke liye kuch nahi hai. Agar aapko lagta hai ke aapka account compromise hua hai, to please seedha customer support se rabta karein."
+    },
+    'emergency_which_card': {
+        'en': "You have {count} cards on file. Which one would you like to lock?\n{card_list}",
+        'ur': "آپ کے پاس \u2066{count}\u2069 کارڈز موجود ہیں۔ آپ کون سا بند کرنا چاہتے ہیں؟\n{card_list}",
+        'ru': "Aap ke paas {count} cards hain. Aap konsa lock karna chahte hain?\n{card_list}"
+    },
+    'emergency_card_invalid_choice': {
+        'en': "❌ Sorry, I didn't catch that. Please reply with the number of the card (e.g. \"1\") or its last 4 digits.",
+        'ur': "❌ معذرت، یہ سمجھ نہیں آیا۔ براۓ کرم کارڈ کا نمبر (مثلاً \"1\") یا اس کے آخری 4 ہندسے لکھیں۔",
+        'ru': "❌ Maaf karein, yeh samajh nahi aaya. Card ka number (jaise \"1\") ya aakhri 4 digits batayein."
+    },
     'password_incorrect': {
         'en': "❌ Incorrect password. Transaction cancelled.",
         'ur': "❌ غلط پاس ورڈ۔ ٹرانزیکشن منسوخ کر دی گئی۔",
@@ -712,9 +780,9 @@ RESPONSES = {
         'ru': "❌ Nakafi points. Aap ke paas {points} points hain lekin {required} points ki zaroorat hai."
     },
     'human_handoff': {
-        'en': "Connecting you to a human banker...",
-        'ur': "آپ کو بینکر سے جوڑا جا رہا ہے...",
-        'ru': "Aap ko banker se joda ja raha hai..."
+        'en': "Sure thing — connecting you to a human banker now...",
+        'ur': "ٹھیک ہے، آپ کو بینکر سے جوڑا جا رہا ہے...",
+        'ru': "Bilkul — aapko ek human banker se jorha ja raha hai..."
     },
 
     # ---- Cancellation / edit / confirmation / help templates ----
@@ -784,9 +852,9 @@ RESPONSES = {
         'ru': "Theek hai - konsa provider hona chahiye?"
     },
     'edit_reprompt_bill_reference': {
-        'en': "Sure - what's the correct bill reference number?",
-        'ur': "ٹھیک ہے - درست بل ریفرنس نمبر کیا ہے؟",
-        'ru': "Theek hai - sahi bill reference number kya hai?"
+        'en': "Sure - what's the correct bill reference number? (digits only)",
+        'ur': "ٹھیک ہے - درست بل ریفرنس نمبر کیا ہے؟ (صرف نمبر)",
+        'ru': "Theek hai - sahi bill reference number kya hai? (sirf numbers)"
     },
     'edit_nothing_to_edit': {
         'en': "There's nothing to edit yet - what would you like to do?",
@@ -854,9 +922,9 @@ RESPONSES = {
         'ru': "Apna service provider batayein, maslan K-Electric, LESCO, SSGC, PTCL, waghera."
     },
     'help_bill_reference': {
-        'en': "Type your bill's reference number, found on your bill statement.",
-        'ur': "اپنے بل کا ریفرنس نمبر لکھیں، جو آپ کے بل سٹیٹمنٹ پر موجود ہے۔",
-        'ru': "Apne bill ka reference number type karein, jo bill statement par hota hai."
+        'en': "Type your bill's reference number (digits only), found on your bill statement.",
+        'ur': "اپنے بل کا ریفرنس نمبر (صرف نمبر) لکھیں، جو آپ کے بل سٹیٹمنٹ پر موجود ہے۔",
+        'ru': "Apne bill ka reference number (sirf numbers) type karein, jo bill statement par hota hai."
     },
     'help_bill_amount': {
         'en': "Type how much your bill amount is.",
@@ -960,6 +1028,11 @@ _SLOT_FILL_ONLY_TOKENS = frozenset([
     'rs', 'pkr', 'rupees', 'rupee', 'rupay', 'rupaye',
     # account/reference label words
     'account', 'number', 'ref', 'no', 'acc',
+    # Urdu-script affirmatives/negatives (carry no independent language
+    # signal beyond what Step 1 of resolve_language() already handles,
+    # but included here for consistency with the Latin-script tokens above).
+    'ہاں', 'جی', 'ٹھیک', 'بالکل', 'درست', 'صحیح',
+    'نہیں', 'نہ', 'غلط', 'منسوخ', 'کینسل',
 ])
 
 
@@ -984,7 +1057,10 @@ def _is_ambiguous_reply(text: str) -> bool:
         return True
     # If the ONLY meaningful tokens are a single Urdu/RU word already known
     # to be a confirmation (haan, ji, theek, etc.) → ambiguous
-    if len(meaningful) == 1 and meaningful[0] in {'haan', 'nahi', 'ji', 'theek', 'sahi', 'galat'}:
+    if len(meaningful) == 1 and meaningful[0] in {
+        'haan', 'nahi', 'ji', 'theek', 'sahi', 'galat',
+        'ہاں', 'جی', 'ٹھیک', 'بالکل', 'درست', 'صحیح', 'نہیں', 'نہ', 'غلط', 'منسوخ',
+    }:
         return True
     return False
 
@@ -1562,6 +1638,36 @@ TRANSFER_METHOD_MAP = {
     'account': 'Account Number',
     'raast id': 'Raast ID',
     'raast': 'Raast ID',
+    # Roman Urdu variants
+    'khata number': 'Account Number',
+    'khaata number': 'Account Number',
+    'khata no': 'Account Number',
+    'khaata no': 'Account Number',
+    'khata': 'Account Number',       # be careful: 'khata' alone is common
+                                       # enough in casual speech that this
+                                       # is reasonable, but sanity-check it
+                                       # doesn't collide with any other
+                                       # slot's vocabulary in this flow
+    'ibaan': 'IBAN',                  # common phonetic misspelling
+    # Urdu script variants
+    #
+    # IMPORTANT: extract_transfer_method() compares these keys against
+    # normalize_slang(text) — NOT the raw survey text — and dict keys here
+    # are matched as literal substrings, not re-normalized themselves. So
+    # each key below must already be in its POST-NORMALIZATION form.
+    # normalize_for_matching()'s diacritic-stripping step (NFD + combining-
+    # mark removal) rewrites precomposed hamza/madda letters — آ ("alef
+    # madda") strips down to bare ا, and ئ/ؤ ("yeh/waw with hamza above")
+    # strip down to bare ي/و — so e.g. "آئی بین" (IBAN, as a user would
+    # actually type/see it) normalizes to "ايی بین" at runtime, and it's
+    # THAT string which must be the map key, not the pretty display form.
+    # Verified empirically via normalize_for_matching() rather than assumed.
+    'ايی بین': 'IBAN',                 # normalized form of "آئی بین"
+    'اکاونٹ نمبر': 'Account Number',    # covers both "اکاؤنٹ نمبر" and "اکاونٹ نمبر" once normalized
+    'کھاتہ نمبر': 'Account Number',     # no hamza/madda chars — normalizes unchanged
+    'اکاونٹ': 'Account Number',        # normalized form of "اکاؤنٹ"
+    'راست ايی ڈی': 'Raast ID',         # normalized form of "راست آئی ڈی"
+    'راست': 'Raast ID',
 }
 
 
@@ -1721,6 +1827,12 @@ DESCRIPTION_MAP = {
 # used to auto-fill the slot rather than blocking the conversation on it.
 DEFAULT_TRANSFER_DESCRIPTION = 'Transfer'
 
+# 'purpose' is no longer asked as its own slot (it duplicated 'description'
+# - see FLOW_SLOT_ORDER['transfer_money']), but RESPONSES['transfer_confirm']
+# and downstream consumers (app.py, frontend confirmation summaries) still
+# read entities.get('purpose'), so it's silently defaulted to this instead.
+DEFAULT_TRANSFER_PURPOSE = 'Personal'
+
 
 def extract_description(text: str) -> Optional[str]:
     """Extract the (optional) transfer description/category - matches the
@@ -1734,15 +1846,19 @@ def extract_description(text: str) -> Optional[str]:
 
 
 def extract_bill_reference(text: str) -> Optional[str]:
-    """Extract bill reference number — accepts anything reasonable.
+    """Extract bill reference number — digits only.
 
     Eastern Arabic-Indic digits are translated to ASCII first,
     before the cleanup regex runs, so native-digit reference numbers are
     never silently stripped.
 
     Strip common Urdu and English label/filler phrases before
-    collapsing to alphanumeric, so "mera reference number hay ABC13346"
-    yields "ABC13346" and not "MERAHAYABC13346".
+    isolating the numeric token, so "mera reference number hay 13346789"
+    yields "13346789" and not "MERAHAY13346789".
+
+    Returns None (rather than a permissive fallback) when no run of 4-20
+    digits can be found — reference numbers are numeric-only, matching the
+    bank's real bill-statement format.
     """
     text = text.strip()
     # Normalise Indic digits before any further processing.
@@ -1772,24 +1888,58 @@ def extract_bill_reference(text: str) -> Optional[str]:
 
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # Try to isolate a clean alphanumeric reference token first
-    # (look for a contiguous block of letters+digits, 4–20 chars)
-    tokens = re.findall(r'[A-Z0-9]{4,20}', text.upper())
+    # Isolate a contiguous run of digits, 4–20 chars long. No fallback to
+    # non-numeric input — genuinely non-numeric text returns None so the
+    # caller can re-prompt via the 'bill_reference_invalid' response.
+    tokens = re.findall(r'\d{4,20}', text)
     if tokens:
         # Prefer the longest token (most likely to be the actual reference)
         return max(tokens, key=len)
 
-    cleaned = re.sub(r'[^A-Z0-9]', '', text.upper())
-    if 4 <= len(cleaned) <= 20:
-        return cleaned
+    return None
 
-    if len(text) >= 4:
-        return text.upper().replace(' ', '')
+
+def extract_card_selection(text: str, cards: List[Dict]) -> Optional[str]:
+    """
+    Match a user's reply against a list of the account's cards during
+    EMERGENCY_AWAIT_CARD_SELECTION.
+
+    `cards` is a list of dicts shaped like features.list_cards()'s output:
+    [{'card_id': ..., 'card_number_masked': '**** **** **** 1234', ...}, ...]
+
+    Supports two natural ways of picking a card:
+      - A 1-based list position ("1", "2", "option 2", "دوسرا").
+      - The card's last 4 digits, typed anywhere in the message (e.g.
+        "1234" or "the one ending 1234").
+
+    Returns the matching card's 'card_id', or None if nothing matched
+    (including an out-of-range position, or digits that don't match any
+    card's last 4).
+    """
+    if not cards:
+        return None
+
+    stripped = text.strip()
+
+    # 1-based position match: a bare (or near-bare) small number.
+    pos_match = re.search(r'(?<!\d)([1-9])(?!\d)', stripped)
+    if pos_match:
+        idx = int(pos_match.group(1)) - 1
+        if 0 <= idx < len(cards):
+            return cards[idx].get('card_id')
+
+    # Last-4-digits match: look for any 4-digit run in the reply and
+    # compare it against each card's masked number.
+    digit_runs = re.findall(r'\d{4}', stripped)
+    for run in digit_runs:
+        for card in cards:
+            masked = card.get('card_number_masked', '')
+            if masked.endswith(run):
+                return card.get('card_id')
 
     return None
 
 
-def extract_redemption_choice(text: str) -> Optional[int]:
     """
     Extract redemption choice from text.
 
@@ -1880,11 +2030,11 @@ TRANSFER_SLOTS = {
         extractor=extract_amount,
         on_missing_response_key='transfer_ask_amount',
     ),
-    'purpose': Slot(
-        name='purpose',
-        extractor=extract_purpose,
-        on_missing_response_key='transfer_ask_purpose',
-    ),
+    # 'purpose' slot removed - it duplicated 'description' (both asked
+    # "why are you sending this money"). ctx['purpose'] is now silently
+    # defaulted to 'Personal' instead (see DEFAULT_TRANSFER_DESCRIPTION
+    # pre-seeding below) so templates/consumers that still read it keep
+    # working unchanged.
     'description': Slot(
         name='description',
         extractor=extract_description,
@@ -1907,6 +2057,7 @@ BILL_SLOTS = {
         name='bill_reference',
         extractor=extract_bill_reference,
         on_missing_response_key='bill_ask_reference',
+        on_invalid_response_key='bill_reference_invalid',
     ),
     'amount': Slot(
         name='amount',
@@ -1926,7 +2077,6 @@ HELP_KEY_FOR_SLOT = {
     ('transfer_money', 'transfer_method'): 'help_transfer_method',
     ('transfer_money', 'transfer_identifier'): 'help_transfer_identifier',
     ('transfer_money', 'amount'): 'help_transfer_amount',
-    ('transfer_money', 'purpose'): 'help_transfer_purpose',
     ('transfer_money', 'description'): 'help_transfer_description',
     ('pay_bill', 'bill_category'): 'help_bill_category',
     ('pay_bill', 'service_provider'): 'help_bill_provider',
@@ -1941,7 +2091,6 @@ CLARIFICATION_TYPE_FOR_SLOT = {
     'amount': 'amount_missing',
     'transfer_method': 'transfer_method_missing',
     'transfer_identifier': 'transfer_identifier_missing',
-    'purpose': 'purpose_missing',
     'description': 'description_missing',
     'bill_category': 'bill_category_missing',
     'service_provider': 'service_provider_missing',
@@ -1994,6 +2143,16 @@ def check_global_controls(user_message: str, ctx: Dict) -> Optional[Dict]:
             # stash it under ctx['suspended_state'] untouched.
             suspended_state = {k: v for k, v in ctx.items() if k != 'suspended_state'}
 
+        # This interceptor has no DB access (it's pure text-in/dict-out,
+        # same constraint noted on _recipient_resolver's design), and card
+        # count/selection needs the CALLER's own account_number - which,
+        # unlike a phone/account number typed into a transfer, is never
+        # part of the free text here. So app.py (which has account_number
+        # via session) is responsible for turning this preliminary result
+        # into the final one: 0 cards -> emergency_no_cards_registered
+        # (never reaches the password step), 1 card -> unchanged, 2+ cards
+        # -> EMERGENCY_AWAIT_CARD_SELECTION instead. See app.py's handling
+        # of intent == 'emergency'.
         result = {
             'intent': 'emergency',
             'language': language,
@@ -2007,6 +2166,7 @@ def check_global_controls(user_message: str, ctx: Dict) -> Optional[Dict]:
             'awaiting_emergency_password': True,
             'emergency_attempts': 3,
             'flow_state': FlowState.EMERGENCY_AWAIT_PASSWORD.name,
+            'emergency_lock_all': bool(_matches_any(normalized, EMERGENCY_ALL_CARDS_PATTERNS)),
         }
         if suspended_flow:
             result['suspended_flow'] = suspended_flow
@@ -2246,6 +2406,17 @@ def try_handle_edit_previous(user_message: str, ctx: Dict) -> Optional[Dict]:
             result[key] = new_ctx[key]
     if new_ctx.get('provider_hint'):
         result['provider_hint'] = new_ctx['provider_hint']
+    # 'purpose' (see the carry-forward note in run_flow_step), and
+    # 'recipient'/'account_number' (resolved via DB lookup rather than
+    # being slots of their own - see TRANSFER_SLOTS) are none of them in
+    # slot_order, so the loop above never re-emits them. Without this,
+    # editing e.g. 'description' or 'amount' after the recipient has
+    # already been resolved would silently drop the recipient/account
+    # from context, causing a KeyError the next time the confirmation
+    # prompt tries to render (it always expects ctx['recipient']).
+    for extra_key in ('recipient', 'account_number', 'purpose'):
+        if new_ctx.get(extra_key) is not None:
+            result[extra_key] = new_ctx[extra_key]
     return result
 
 
@@ -2347,6 +2518,8 @@ def handle_recipient_step(user_message: str, ctx: Dict, language: str) -> Dict:
                 'transfer_method': ctx.get('transfer_method'),
                 '_awaiting_manual_recipient_name': True,
             }
+            if ctx.get('purpose') is not None:
+                result['purpose'] = ctx['purpose']
             return result
 
         new_ctx = dict(ctx)
@@ -2406,6 +2579,8 @@ def handle_recipient_step(user_message: str, ctx: Dict, language: str) -> Dict:
         'transfer_identifier': ctx.get('transfer_identifier'),
         'transfer_method': ctx.get('transfer_method'),
     }
+    if ctx.get('purpose') is not None:
+        result['purpose'] = ctx['purpose']
     return result
 
 
@@ -2476,6 +2651,163 @@ def _enter_password_state(current_flow: str, ctx: Dict, language: str) -> Dict:
     }
 
 
+# Slots that are deliberately EXCLUDED from the generic pre-fill loop below
+# because their extractors are open-ended/catch-all matchers designed to
+# run only once the user has been specifically asked for that value (e.g.
+# "what's your bill reference number?"). 'transfer_identifier' is excluded
+# for a different reason: it's handled via method-inference instead (see
+# _infer_transfer_method_from_identifier_shape), reusing run_flow_step's
+# own resolution/validation logic rather than duplicating it.
+#
+# IMPORTANT: excluding a slot here does NOT fully shield it from the raw
+# opening message. If every slot ordered before it does get pre-filled,
+# it becomes the first still-empty slot, and run_flow_step's OWN
+# extraction (on its very first, non-recursive call) will run that same
+# extractor against the full raw message anyway. 'bill_reference' gets an
+# extra confidence gate for exactly this reason - see the dedicated
+# handling in _prefill_flow_slots below - rather than being silently
+# excluded and left exposed to that same risk via a different code path.
+PREFILL_EXCLUDED_SLOTS = {'transfer_identifier', 'bill_reference'}
+
+
+def _infer_transfer_method_from_identifier_shape(user_message: str) -> Optional[str]:
+    """
+    Best-effort guess at which transfer_method the user meant, based on the
+    SHAPE of a destination identifier found in their opening message -
+    used only by the pre-fill pass, and only when the user didn't already
+    name a method explicitly (see _prefill_flow_slots). This mirrors (but
+    does not duplicate) the shape checks already performed inside
+    run_flow_step's 'transfer_identifier' special-case block: the actual
+    extraction, format validation, and DB resolution for the identifier
+    itself is always left to that existing code, on the very next
+    run_flow_step call - this function's only job is to pick a starting
+    transfer_method so that call has one to check against.
+    """
+    extracted = extract_transfer_identifier(user_message)
+    if not extracted:
+        return None
+
+    if re.fullmatch(r'PK\d{2}[A-Z]{4}\d{16}', extracted):
+        return 'IBAN'
+    if re.fullmatch(r'0(3\d{9})', extracted):
+        # 11-digit 03XXXXXXXXX shape - most likely a Raast ID (the phone-
+        # number-linked rail); try that first. If it turns out not to be
+        # registered, run_flow_step's existing 'transfer_phone_not_found'
+        # handling takes over on the very next call, exactly as it would
+        # for a Raast ID typed on a later turn.
+        return 'Raast ID'
+    if re.fullmatch(r'\d{8,16}', extracted):
+        return 'Account Number'
+    return None
+
+
+def _confident_bill_reference(user_message: str) -> Optional[str]:
+    """
+    A stricter wrapper around extract_bill_reference(), used ONLY by the
+    pre-fill pass. extract_bill_reference() is intentionally permissive
+    (by design, it "accepts anything reasonable" once it's been asked for
+    directly - see its docstring) - fine when it's only ever run in
+    response to "what's your bill reference number?", but too loose to
+    run blindly against an entire opening message: e.g. on "pay my
+    electricity bill of 3000 from lesco" it would happily return
+    "ELECTRICITY" as if that were a reference number, because after label
+    words are stripped, "ELECTRICITY" is still a bare 4+ character token.
+
+    Real bill reference numbers always contain at least one digit, so
+    requiring that here filters out that entire class of false positive
+    without touching extract_bill_reference() itself (which must stay
+    exactly as permissive as it already is for its normal, directly-asked
+    use).
+    """
+    candidate = extract_bill_reference(user_message)
+    if candidate and any(ch.isdigit() for ch in candidate):
+        return candidate
+    return None
+
+
+def _prefill_flow_slots(user_message: str, current_flow: str, base_ctx: Dict) -> Dict:
+    """
+    Runs once, only on the turn a flow (transfer_money / pay_bill) first
+    becomes active, BEFORE the first run_flow_step call. Without this,
+    run_flow_step only ever extracts a value for the single first empty
+    slot in FLOW_SLOT_ORDER - so an opening message that already answers
+    several slots at once (e.g. "send 400RS to 03252118947") would have
+    every slot after the first silently discarded, and the user would be
+    re-asked for things they already said.
+
+    Tries each slot's own extractor (the exact same ones run_flow_step
+    would use later for that slot) against the raw user_message, in slot
+    order, and fills `ctx` for every slot that extracts a valid value.
+    This is purely additive: base_ctx is never overwritten, extraction
+    failures are silently skipped (leaving the slot for the normal
+    per-slot flow to ask about, same as today), and nothing here bypasses
+    a validator a slot already has.
+
+    'transfer_identifier' is handled specially (see
+    _infer_transfer_method_from_identifier_shape) - only transfer_method
+    may be pre-filled from it; the identifier value itself, its format
+    validation, and its DB resolution are all left to run_flow_step's
+    existing logic on the immediately-following call, so that logic never
+    has to be duplicated here.
+
+    'bill_reference' is also handled specially (see
+    _confident_bill_reference) with an extra digit-presence check, rather
+    than simply being skipped - see the PREFILL_EXCLUDED_SLOTS comment for
+    why merely excluding it wouldn't actually avoid the false-positive risk.
+
+    Never touches 'recipient' - recipient is never parsed from free text,
+    only ever resolved server-side via 'transfer_identifier' (see the
+    NOTE at the top of TRANSFER_SLOTS and FLOW_SLOT_ORDER).
+    """
+    ctx = dict(base_ctx)
+    slot_order = FLOW_SLOT_ORDER[current_flow]
+    slots = FLOW_SLOTS[current_flow]
+
+    for slot_name in slot_order:
+        if ctx.get(slot_name):
+            # Already provided by the caller (e.g. the 'description'/
+            # 'purpose' defaults pre-seeded by process_message) - don't
+            # clobber it.
+            continue
+
+        if slot_name == 'bill_reference':
+            extracted = _confident_bill_reference(user_message)
+            if extracted is not None:
+                ctx[slot_name] = extracted
+            continue
+
+        if slot_name in PREFILL_EXCLUDED_SLOTS:
+            continue
+
+        slot_def = slots[slot_name]
+        try:
+            extracted = slot_def.extractor(user_message)
+        except Exception:
+            extracted = None
+
+        if extracted is None:
+            continue
+        if slot_def.validator and not slot_def.validator(extracted):
+            continue
+
+        ctx[slot_name] = extracted
+
+        if current_flow == 'pay_bill' and slot_name == 'bill_category':
+            # Mirrors the same side-effect run_flow_step performs when it
+            # fills 'bill_category' itself (see the "advance" branch
+            # below) - the dependent "Service Provider" prompt needs this
+            # hint regardless of whether the category came from here or
+            # from a later turn.
+            ctx['provider_hint'] = PROVIDERS_BY_CATEGORY_DISPLAY.get(extracted, '')
+
+    if current_flow == 'transfer_money' and not ctx.get('transfer_method'):
+        inferred_method = _infer_transfer_method_from_identifier_shape(user_message)
+        if inferred_method:
+            ctx['transfer_method'] = inferred_method
+
+    return ctx
+
+
 def run_flow_step(user_message: str, ctx: Dict, language: str,
                    force_flow: Optional[str] = None,
                    skip_extraction: bool = False) -> Dict:
@@ -2513,7 +2845,12 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         ai_response = _render_confirmation_prompt(current_flow, new_ctx, effective_language)
 
         entities = {k: new_ctx[k] for k in slot_order}
-        for extra_key in ('recipient', 'account_number'):
+        # 'purpose' is no longer a collected slot (see FLOW_SLOT_ORDER), but
+        # it's silently pre-seeded in ctx (DEFAULT_TRANSFER_PURPOSE) and
+        # still consumed by RESPONSES['transfer_confirm'] and downstream
+        # consumers, so it has to be carried through like the other
+        # not-in-slot_order fields below.
+        for extra_key in ('recipient', 'account_number', 'purpose'):
             if new_ctx.get(extra_key) is not None:
                 entities[extra_key] = new_ctx[extra_key]
 
@@ -2533,7 +2870,7 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         }
         for key in slot_order:
             result[key] = new_ctx[key]
-        for extra_key in ('recipient', 'account_number'):
+        for extra_key in ('recipient', 'account_number', 'purpose'):
             if new_ctx.get(extra_key) is not None:
                 result[extra_key] = new_ctx[extra_key]
         return result
@@ -2551,7 +2888,23 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
 
     extracted = None
     try:
-        extracted = slot_def.extractor(user_message)
+        if target_slot == 'bill_reference' and not flow_was_already_active:
+            # Fresh flow entry (this call's user_message is an opening
+            # statement, not necessarily a targeted answer to "what's your
+            # bill reference number?"). This only happens at all when the
+            # pre-fill pass (see _prefill_flow_slots) has already filled
+            # every slot ordered before 'bill_reference', which is new
+            # behavior it introduces - in the old single-slot-only design,
+            # a fresh entry's target_slot was always 'bill_category', never
+            # 'bill_reference'. extract_bill_reference() is intentionally
+            # permissive for its normal (directly-asked) use, so route
+            # through the same stricter, digit-requiring check the
+            # pre-fill pass itself uses, to avoid the same false-positive
+            # class (e.g. "ELECTRICITY" from "pay my electricity bill of
+            # 3000 from lesco" being mistaken for a reference number).
+            extracted = _confident_bill_reference(user_message)
+        else:
+            extracted = slot_def.extractor(user_message)
     except Exception:
         extracted = None
 
@@ -2603,6 +2956,11 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
             for key in slot_order:
                 if key != target_slot and ctx.get(key):
                     result[key] = ctx[key]
+            # 'purpose' is pre-seeded at flow entry but isn't in slot_order
+            # (see FLOW_SLOT_ORDER), so it has to be carried forward
+            # explicitly here or it silently drops out of session context.
+            if ctx.get('purpose') is not None:
+                result['purpose'] = ctx['purpose']
             return result
 
         resolved = None
@@ -2636,6 +2994,9 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
                 for key in slot_order:
                     if key != target_slot and ctx.get(key):
                         result[key] = ctx[key]
+                # See the 'purpose' carry-forward note above.
+                if ctx.get('purpose') is not None:
+                    result['purpose'] = ctx['purpose']
                 return result
 
         elif chosen_method == 'Account Number':
@@ -2681,12 +3042,53 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
                 'transfer_identifier': extracted,
                 'transfer_method': chosen_method,
             }
+            # Carry forward any OTHER slot already filled (e.g. 'amount' or
+            # 'description', if the pre-fill pass - see _prefill_flow_slots -
+            # already pulled them out of the same opening message) so they
+            # aren't lost while we pause here for recipient confirmation.
+            for key in slot_order:
+                if key not in ('transfer_identifier',) and ctx.get(key):
+                    result[key] = ctx[key]
+            if ctx.get('purpose') is not None:
+                result['purpose'] = ctx['purpose']
             return result
 
-        # No DB match: IBAN, or an Account Number that isn't a FinBud-AI
-        # account. This is an external-bank transfer - there's no name to
-        # auto-verify, so ask the user to type it in directly rather than
-        # inventing a placeholder like "Bank Account (...1234)".
+        # No DB match for Account Number, or IBAN was never looked up
+        # (IBANs aren't resolved against FinBud's own accounts, so
+        # `resolved` stays None for that method by design).
+        if chosen_method == 'Account Number':
+            # An unresolved Account Number is treated as a probable typo,
+            # not "this must be some other bank" - re-prompt for the same
+            # slot instead of jumping to asking for a recipient name.
+            # (IBAN and Raast ID "not found" behavior is untouched - see
+            # the Raast ID branch above and the 'else' below for IBAN.)
+            ai_response = RESPONSES['transfer_account_not_found'][effective_language]
+            result = {
+                'intent': current_flow,
+                'language': effective_language,
+                'session_language': ctx.get('session_language', language),
+                'entities': {},
+                'needs_clarification': True,
+                'clarification_type': 'transfer_account_not_found',
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalized,
+                'ai_response': ai_response,
+                'current_flow': current_flow,
+                'flow_state': FLOW_SLOT_STATE[(current_flow, target_slot)].name,
+            }
+            for key in slot_order:
+                if key != target_slot and ctx.get(key):
+                    result[key] = ctx[key]
+            # See the 'purpose' carry-forward note above. transfer_identifier
+            # is intentionally left unset so the user can retype it.
+            if ctx.get('purpose') is not None:
+                result['purpose'] = ctx['purpose']
+            return result
+
+        # No DB match: IBAN. This is an external-bank transfer - there's no
+        # name to auto-verify, so ask the user to type it in directly
+        # rather than inventing a placeholder like "Bank Account (...1234)".
         new_ctx = dict(ctx)
         new_ctx['transfer_identifier'] = extracted
         new_ctx['current_flow'] = current_flow
@@ -2709,6 +3111,13 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
             'transfer_method': chosen_method,
             '_awaiting_manual_recipient_name': True,
         }
+        # See the same carry-forward note in the 'resolved' branch above -
+        # pre-filled 'amount'/'description' must survive this detour too.
+        for key in slot_order:
+            if key not in ('transfer_identifier',) and ctx.get(key):
+                result[key] = ctx[key]
+        if ctx.get('purpose') is not None:
+            result['purpose'] = ctx['purpose']
         return result
 
     if slot_def.validator and extracted is not None and not slot_def.validator(extracted):
@@ -2759,7 +3168,7 @@ def run_flow_step(user_message: str, ctx: Dict, language: str,
         for key in slot_order:
             if key != target_slot and ctx.get(key):
                 result[key] = ctx[key]
-        for extra_key in ('recipient', 'account_number'):
+        for extra_key in ('recipient', 'account_number', 'purpose'):
             if ctx.get(extra_key) is not None:
                 result[extra_key] = ctx[extra_key]
         if ctx.get('provider_hint'):
@@ -2986,15 +3395,75 @@ class BankAIConversation:
         # Raw password collection states bypass all interceptor/flow logic
         # except emergency pre-emption (handled inside check_global_controls,
         # which explicitly still fires here even when awaiting_password is
-        # set - see its docstring).
+        # set - see its docstring). Card-selection is likewise a narrow,
+        # single-purpose state, so it gets the same emergency pre-emption
+        # carve-out (a genuine new lock request should still be able to
+        # interrupt an in-progress card pick).
         emergency_intercept = None
-        if ctx.get('awaiting_password') or ctx.get('awaiting_emergency_password'):
+        if (ctx.get('awaiting_password') or ctx.get('awaiting_emergency_password')
+                or ctx.get('awaiting_emergency_card_selection')):
             normalized_check = normalize_slang(user_message)
             if _matches_any(normalized_check, INTENT_PATTERNS['emergency']):
                 emergency_intercept = check_global_controls(user_message, ctx)
 
         if emergency_intercept is not None:
             return emergency_intercept
+
+        if ctx.get('awaiting_emergency_card_selection'):
+            # The list of the account's cards (card_id + masked number) was
+            # stashed in ctx by app.py the turn the selection step was
+            # entered - no DB access needed here, mirroring how other
+            # slot-filling steps work off pre-fetched context rather than
+            # querying mid-turn.
+            cards = ctx.get('emergency_cards') or []
+            selected_id = extract_card_selection(user_message, cards)
+            if selected_id is not None:
+                return {
+                    'intent': 'emergency_card_selected',
+                    'language': language,
+                    'entities': {'card_id': selected_id},
+                    'needs_clarification': True,
+                    'clarification_type': 'password_required',
+                    'requires_human': False,
+                    'handoff_reason': None,
+                    'normalized_text': normalize_slang(user_message),
+                    'ai_response': RESPONSES['emergency_password_request'][language],
+                    'awaiting_emergency_password': True,
+                    'emergency_attempts': 3,
+                    'flow_state': FlowState.EMERGENCY_AWAIT_PASSWORD.name,
+                    # Also surfaced as a top-level key (not just inside
+                    # 'entities') so app.py's Context management block —
+                    # which reads nlp_result.get('emergency_card_id')
+                    # generically for every path that sets
+                    # awaiting_emergency_password — persists it the same
+                    # way regardless of which turn set it.
+                    'emergency_card_id': selected_id,
+                }
+            # Invalid selection - re-prompt, staying in the same state.
+            # Re-render the same card list the user was already shown.
+            card_list = "\n".join(
+                f"{i+1}. {c.get('card_number_masked', '****')}"
+                for i, c in enumerate(cards)
+            )
+            return {
+                'intent': 'emergency_card_selection_invalid',
+                'language': language,
+                'entities': {},
+                'needs_clarification': True,
+                'clarification_type': 'card_selection_required',
+                'requires_human': False,
+                'handoff_reason': None,
+                'normalized_text': normalize_slang(user_message),
+                'ai_response': (
+                    RESPONSES['emergency_card_invalid_choice'][language] + "\n\n" +
+                    RESPONSES['emergency_which_card'][language].format(
+                        count=len(cards), card_list=card_list
+                    )
+                ),
+                'awaiting_emergency_card_selection': True,
+                'emergency_cards': cards,
+                'flow_state': FlowState.EMERGENCY_AWAIT_CARD_SELECTION.name,
+            }
 
         if ctx.get('awaiting_emergency_password'):
             # Never echo the raw password text back out via
@@ -3015,6 +3484,12 @@ class BankAIConversation:
                 'original_intent': 'emergency',
                 'emergency_attempts': ctx.get('emergency_attempts', 3),
                 'flow_state': FlowState.EMERGENCY_AWAIT_PASSWORD.name,
+                # Carried forward from whichever earlier turn decided which
+                # card(s) to act on (single-card auto-select, an explicit
+                # "lock all my cards" phrase, or a multi-card selection
+                # step) - see app.py's emergency_password_provided handler.
+                'emergency_card_id': ctx.get('emergency_card_id'),
+                'emergency_lock_all': ctx.get('emergency_lock_all', False),
             }
 
         if ctx.get('awaiting_password'):
@@ -3067,9 +3542,20 @@ class BankAIConversation:
             current_flow_for_confirm_check in FLOW_SLOT_ORDER
             and all(ctx.get(s) for s in FLOW_SLOT_ORDER[current_flow_for_confirm_check])
         )
+        # NOTE: the all_slots_filled fallback must NOT override an explicit
+        # TRANSFER_AWAIT_RECIPIENT flow_state. Since the pre-fill pass (see
+        # _prefill_flow_slots) can now legitimately have every OTHER slot
+        # (amount, description, ...) already filled while we're still
+        # sitting at the recipient-confirmation gate waiting on a yes/no
+        # about the looked-up name, all_slots_filled can be True at the
+        # exact same time flow_state says TRANSFER_AWAIT_RECIPIENT. In that
+        # case the explicit state must win, or a "yes" meant to confirm the
+        # recipient's identity gets misrouted straight past it to the final
+        # transaction confirmation (and from there to the password prompt).
         if (flow_state_name in (FlowState.TRANSFER_AWAIT_CONFIRMATION.name,
                                  FlowState.BILL_AWAIT_CONFIRMATION.name)
-                or all_slots_filled):
+                or (all_slots_filled
+                    and flow_state_name != FlowState.TRANSFER_AWAIT_RECIPIENT.name)):
             return handle_confirmation_step(user_message, ctx, language)
 
         # Recipient-confirmation gate (see handle_recipient_step) - must be
@@ -3094,13 +3580,24 @@ class BankAIConversation:
             # 'description' defaults to "Transfer" - it's an optional field
             # in the app's transfer form, so pre-seed it rather than
             # blocking the conversation on a sixth question.
-            result = run_flow_step(user_message, {'description': DEFAULT_TRANSFER_DESCRIPTION},
+            # 'purpose' is no longer a collected slot (see FLOW_SLOT_ORDER)
+            # but templates/consumers still read entities.get('purpose'),
+            # so silently default it too rather than asking the user.
+            base_ctx = {'description': DEFAULT_TRANSFER_DESCRIPTION,
+                        'purpose': DEFAULT_TRANSFER_PURPOSE}
+            # Pre-fill pass: pull as many slots as possible out of this
+            # opening message (e.g. "send 400RS to 03252118947" should
+            # capture the amount too, not just start the method/identifier
+            # question over from scratch) - see _prefill_flow_slots.
+            prefilled_ctx = _prefill_flow_slots(user_message, 'transfer_money', base_ctx)
+            result = run_flow_step(user_message, prefilled_ctx,
                                    language, force_flow='transfer_money')
             result['session_language'] = language
             return result
 
         if intent == 'pay_bill':
-            result = run_flow_step(user_message, {}, language, force_flow='pay_bill')
+            prefilled_ctx = _prefill_flow_slots(user_message, 'pay_bill', {})
+            result = run_flow_step(user_message, prefilled_ctx, language, force_flow='pay_bill')
             result['session_language'] = language
             return result
 
@@ -3167,8 +3664,10 @@ class BankAIConversation:
                 transfer_ctx = dict(ctx)
                 # 'description' is optional in the app's transfer form and
                 # defaults to "Transfer" - pre-seed it the same way the
-                # regex entry point does.
+                # regex entry point does. Same for 'purpose', which is no
+                # longer asked and is silently defaulted instead.
                 transfer_ctx.setdefault('description', DEFAULT_TRANSFER_DESCRIPTION)
+                transfer_ctx.setdefault('purpose', DEFAULT_TRANSFER_PURPOSE)
                 result = run_flow_step(user_message, transfer_ctx, language,
                                        force_flow='transfer_money')
                 result['session_language'] = language
@@ -3185,7 +3684,7 @@ class BankAIConversation:
                 # resolution entirely and leave 'recipient'/'account_number'
                 # unset, so we let the regex extraction path be the single
                 # source of truth for this slot.
-                for key in ('amount', 'transfer_method', 'purpose', 'description'):
+                for key in ('amount', 'transfer_method', 'description'):
                     if llm_entities.get(key) and not result['entities'].get(key):
                         result['entities'][key] = llm_entities[key]
                 return result
