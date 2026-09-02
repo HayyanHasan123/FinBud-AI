@@ -39,13 +39,9 @@ export function useChatController() {
   const [modal, setModal] = useState(null)
   const [pendingInfo, setPendingInfo] = useState(null)
   const [lastBillType, setLastBillType] = useState(null)
-  const [sessionId, setSessionId] = useState(null)
-  const [isReadOnly, setIsReadOnly] = useState(false)
-  const [sessions, setSessions] = useState([])
 
   useEffect(() => {
     checkCard()
-     loadActiveSession()
     // Module F: Dashboard.jsx sets these on <html> and they persist across
     // client-side navigation, but if a user lands directly on /chat (e.g. a
     // deep link or a fresh tab), apply the saved preference here too.
@@ -137,60 +133,6 @@ export function useChatController() {
     return res.json()
   }
 
-  function rowsToMessages(rows) {
-    const out = []
-    for (const r of rows) {
-      if (r.user_message) out.push({ text: r.user_message, type: 'user', id: `u-${r.id}` })
-      if (r.ai_response)  out.push({ text: r.ai_response,  type: 'ai',   id: `a-${r.id}` })
-    }
-    return out
-  }
-
-  async function loadActiveSession() {
-    try {
-      const res  = await fetch('/api/chat/history', { credentials: 'include' })
-      const data = await res.json()
-      if (data.success && data.session_id) {
-        setMessages(rowsToMessages(data.messages))
-        setSessionId(data.session_id)
-        setIsReadOnly(!data.is_active)
-      }
-    } catch { /* fall back to blank, same as current behavior */ }
-  }
-
-  async function startNewChat() {
-    try {
-      const res  = await fetch('/api/chat/session/new', { method: 'POST', credentials: 'include' })
-      const data = await res.json()
-      if (data.success) {
-        setMessages([])
-        setSessionId(data.session_id)
-        setIsReadOnly(false)
-        setModal(null)
-        setPendingInfo(null)
-      }
-    } catch { appendMessage('Could not start a new chat. Please try again.', 'ai') }
-  }
-
-  async function loadSessions() {
-    try {
-      const res  = await fetch('/api/chat/sessions', { credentials: 'include' })
-      const data = await res.json()
-      if (data.success) setSessions(data.sessions)
-    } catch {}
-  }
-
-  async function openSession(id) {
-    try {
-      const res  = await fetch(`/api/chat/history?session_id=${id}`, { credentials: 'include' })
-      const data = await res.json()
-      if (data.success) {
-        setMessages(rowsToMessages(data.messages))
-        setSessionId(data.session_id)
-        setIsReadOnly(!data.is_active)
-      }
-    } catch {}
-  }
   async function maybePrefill(data) {
     const bt = data.entities && data.entities.bill_type
     if (!bt || bt === lastBillType) return
@@ -207,7 +149,7 @@ export function useChatController() {
     } catch {}
   }
 
-  async function handleResponse(data, { emergencyFlow = false } = {}) {
+  async function handleResponse(data) {
     if (!data.success) {
       appendMessage('Sorry, I encountered an error. Please try again.', 'ai')
       return
@@ -220,31 +162,40 @@ export function useChatController() {
       advisorCta: !!data.redirect_to_advisor,
     })
 
-    const needsPw  = data.awaiting_password
-    const needsEPw = data.awaiting_emergency_password
-    const opensPasswordModal = (needsPw || needsEPw || emergencyFlow) && !((needsEPw || emergencyFlow) && !hasCard)
+    const needsPw      = data.awaiting_password
+    const needsEPw      = data.awaiting_emergency_password
+    const needsCardSel  = data.awaiting_emergency_card_selection
+    const opensPasswordModal = needsPw || needsEPw
 
-    // Speak the reply aloud when hands-free mode is on. If a password
-    // modal is about to open, don't re-arm the mic afterwards — password
-    // entry should stay typed, not spoken.
+    // Speak the reply aloud when hands-free mode is on. If a password or
+    // card-selection modal is about to open, don't re-arm the mic
+    // afterwards — that step should stay typed/tapped, not spoken.
     if (isVoiceModeActive) {
-      voiceManagerRef.current?.speak(data.ai_response, { reArm: !opensPasswordModal })
+      voiceManagerRef.current?.speak(data.ai_response, { reArm: !(opensPasswordModal || needsCardSel) })
     }
 
-    if (!needsPw && !needsEPw && !emergencyFlow) return
-    if ((needsEPw || emergencyFlow) && !hasCard) return
+    if (needsCardSel) {
+      // Multiple cards on file — ask which one before the password step,
+      // rather than assuming "lock everything". The card list came back
+      // from the server (features.list_cards()), already masked.
+      setPendingInfo({ type: 'emergency_card_select', cards: data.emergency_cards || [] })
+      setModal('emergencyCardSelect')
+      return
+    }
+
+    if (!needsPw && !needsEPw) return
 
     const e      = data.entities || {}
     const intent = data.intent   || ''
 
     let config = {}
 
-    if (needsEPw || emergencyFlow) {
+    if (needsEPw) {
       config = {
         type: 'emergency',
-        title: 'Emergency: Lock All Cards',
-        confirmLabel: 'LOCK CARDS NOW',
-        summaryRows: [{ label: 'Action', value: 'Lock all registered cards immediately' }],
+        title: 'Emergency: Lock Card',
+        confirmLabel: 'LOCK CARD NOW',
+        summaryRows: [{ label: 'Action', value: 'Lock the selected card immediately' }],
         intent, entities: e
       }
     } else if (intent === 'pay_bill' || e.bill_type) {
@@ -331,7 +282,6 @@ export function useChatController() {
   }
 
   async function sendMessage(text) {
-    if (isReadOnly) return
     const userText = (text || inputText).trim()
     if (!userText) return
 
@@ -364,7 +314,6 @@ export function useChatController() {
   })
 
   async function handleHumanHandoff() {
-    if (isReadOnly) return
     setMessages(prev => prev.filter(m => m.type !== 'welcome'))
     appendMessage('I want to talk to a human banker', 'user')
     setIsLoading(true)
@@ -382,7 +331,7 @@ export function useChatController() {
   }
 
   async function handleEmergency() {
-    if (!hasCard || isReadOnly) return
+    if (!hasCard) return
     setMessages(prev => prev.filter(m => m.type !== 'welcome'))
     appendMessage('EMERGENCY - Lock my cards!', 'user')
     setIsLoading(true)
@@ -398,7 +347,21 @@ export function useChatController() {
       return
     }
     setIsLoading(false)
-    await handleResponse(data, { emergencyFlow: true })
+    if (data.no_cards_registered) {
+      // Server-side has_registered_card() check caught a stale client
+      // state (e.g. a card was removed in another tab) — refresh so the
+      // Emergency button hides itself.
+      checkCard()
+    }
+    await handleResponse(data)
+  }
+
+  // Sends the user's tapped card choice back through the normal chat
+  // pipeline as plain text (e.g. "1"), the same way every other
+  // slot-filling step in this app works, rather than a bespoke endpoint.
+  async function selectEmergencyCard(label) {
+    setModal(null)
+    await sendMessage(label)
   }
 
   function renderPrint(receipt) {
@@ -444,11 +407,10 @@ export function useChatController() {
     messages, inputText, setInputText, isLoading,
     voiceState, isVoiceModeActive,
     hasCard, modal, setModal, pendingInfo,
-    sessionId, isReadOnly, sessions,
     // actions
     speak, toggleVoiceMode, openAdvisor,
     sendMessage, handleHumanHandoff, handleEmergency,
     submitPassword, downloadReceipt, emailReceipt,
-    startNewChat, loadSessions, openSession,
+    selectEmergencyCard,
   }
 }

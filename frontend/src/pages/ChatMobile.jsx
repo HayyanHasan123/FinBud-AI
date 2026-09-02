@@ -13,23 +13,21 @@ import { useChatController } from './useChatController'
 // before anything is actually triggered.
 export default function ChatMobile() {
   const navigate = useNavigate()
-    const {
+  const {
     messagesEndRef, printRef,
     messages, inputText, setInputText, isLoading,
     voiceState, isVoiceModeActive,
     hasCard, modal, setModal, pendingInfo,
-    sessionId, isReadOnly, sessions,
     speak, toggleVoiceMode, openAdvisor,
     sendMessage, handleHumanHandoff, handleEmergency,
     submitPassword, downloadReceipt, emailReceipt,
-    startNewChat, loadSessions, openSession,
+    selectEmergencyCard,
   } = useChatController()
 
   // "+" action sheet: null (closed) -> 'menu' (pick an action) -> 'confirm-human' | 'confirm-emergency'
   const [actionSheet, setActionSheet] = useState(null)
   const sheetRef = useRef(null)
   const plusBtnRef = useRef(null)
-  const [showHistory, setShowHistory] = useState(false)
 
   useEffect(() => {
     if (!actionSheet) return
@@ -104,6 +102,37 @@ export default function ChatMobile() {
           <button type="button" className="m-btn-secondary" onClick={() => setModal(null)}>BACK</button>
           <p className="m-note">Note: this confirms with your account password.</p>
         </form>
+      </div>
+    )
+  }
+
+  // ── EMERGENCY CARD-SELECTION BOTTOM SHEET ────────────────
+  // Mobile equivalent of Chat.jsx's CardSelectModal — shown ahead of the
+  // password sheet when the account has 2+ cards.
+  function CardSelectSheet() {
+    const cards = pendingInfo?.cards || []
+    return (
+      <div className="m-sheet emergency">
+        <div className="m-sheet-handle" />
+        <button className="m-sheet-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
+        <h3>Which card would you like to lock?</h3>
+        <p style={{ fontSize: 13, color: '#666', marginBottom: 14 }}>
+          You have {cards.length} cards on file.
+        </p>
+        <div className="m-summary" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {cards.map((c, i) => (
+            <button
+              key={c.card_id ?? i}
+              type="button"
+              className="m-btn-secondary"
+              style={{ textAlign: 'left', width: '100%' }}
+              onClick={() => selectEmergencyCard(String(i + 1))}
+            >
+              {c.card_number_masked || `Card ${i + 1}`}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="m-btn-secondary" style={{ marginTop: 12 }} onClick={() => setModal(null)}>CANCEL</button>
       </div>
     )
   }
@@ -267,17 +296,6 @@ export default function ChatMobile() {
 
         html[data-font-size="small"] .message { font-size:13px; }
         html[data-font-size="small"] .m-input-area input { font-size:14px; }
-        .topbar-actions { display:flex; align-items:center; gap:6px; }
-        .topbar-icon-btn { background:none; border:none; color:var(--primary-purple); font-size:16px; cursor:pointer; padding:8px; border-radius:6px; }
-        .chat-closed-badge { background:#6b7280; color:#fff; font-size:10px; font-weight:700; padding:3px 8px; border-radius:10px; letter-spacing:.5px; text-transform:uppercase; }
-        .history-panel { position:absolute; top:56px; right:10px; left:10px; max-height:50vh; overflow-y:auto; background:var(--card); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.15); z-index:20; padding:8px; }
-        .history-item { display:flex; justify-content:space-between; align-items:center; width:100%; text-align:left; background:none; border:none; padding:10px 8px; border-radius:6px; cursor:pointer; }
-        .history-item:hover, .history-item.current { background:var(--secondary-purple); }
-        .history-empty { padding:16px; text-align:center; color:#6b7280; font-size:13px; }
-        .history-preview { font-size:13px; color:var(--text-dark); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70%; }
-        .history-status { font-size:11px; font-weight:700; }
-        .history-status.active { color:#15803d; }
-        .history-status.closed { color:#6b7280; }
       `}</style>
 
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -294,30 +312,7 @@ export default function ChatMobile() {
             <span className="m-logo-circle">AI</span>
             <h1>FinBud Chat</h1>
           </div>
-          <div className="topbar-actions">
-            {isReadOnly && <span className="chat-closed-badge">Closed</span>}
-            <button className="topbar-icon-btn" aria-label="Chat history"
-              onClick={() => { setShowHistory(s => !s); loadSessions() }}>
-              <i className="fas fa-clock-rotate-left" />
-            </button>
-            <button className="topbar-icon-btn" aria-label="New chat" onClick={startNewChat}>
-              <i className="fas fa-plus" />
-            </button>
-          </div>
         </header>
-
-        {showHistory && (
-          <div className="history-panel">
-            {sessions.length === 0 && <p className="history-empty">No past conversations yet.</p>}
-            {sessions.map(s => (
-              <button key={s.id} className={`history-item ${s.id === sessionId ? 'current' : ''}`}
-                onClick={() => { openSession(s.id); setShowHistory(false) }}>
-                <span className="history-preview">{s.preview || '(empty conversation)'}</span>
-                <span className={`history-status ${s.status}`}>{s.status === 'active' ? 'Active' : 'Closed'}</span>
-              </button>
-            ))}
-          </div>
-        )}
 
         {/* MESSAGES */}
         <div className="m-messages">
@@ -377,7 +372,7 @@ export default function ChatMobile() {
                     </span>
                     <span>
                       <p className="m-action-title">Emergency</p>
-                      <p className="m-action-desc">{hasCard ? 'Lock all cards now' : 'No card registered'}</p>
+                      <p className="m-action-desc">{hasCard ? 'Lock a card now' : 'No card registered'}</p>
                     </span>
                   </button>
                 </>
@@ -397,7 +392,7 @@ export default function ChatMobile() {
               {actionSheet === 'confirm-emergency' && (
                 <div className="m-confirm-box">
                   <p className="title">Emergency</p>
-                  <p>This will immediately lock all your registered cards. Send this request?</p>
+                  <p>This will start the emergency card-lock process. If you have more than one card, you'll be asked which one to lock. Send this request?</p>
                   <div className="m-confirm-actions">
                     <button className="m-confirm-cancel" onClick={() => setActionSheet('menu')}>Cancel</button>
                     <button className="m-confirm-send emergency" onClick={confirmAndSend}>Send</button>
@@ -413,26 +408,24 @@ export default function ChatMobile() {
               type="button"
               className={`m-plus-btn ${actionSheet ? 'open' : ''}`}
               onClick={togglePlus}
-              disabled={isReadOnly}
               aria-label={actionSheet ? 'Close quick actions' : 'Open quick actions'}
               aria-expanded={!!actionSheet}
             >
               +
             </button>
-                        <input
+            <input
               type="text"
-              placeholder={isReadOnly ? 'This conversation is closed' : 'Ask FinBud AI a question...'}
+              placeholder="Ask FinBud AI a question..."
               value={inputText}
               onChange={e => setInputText(e.target.value)}
               onFocus={() => setActionSheet(null)}
-              onKeyDown={e => e.key === 'Enter' && !isLoading && !isReadOnly && sendMessage()}
-              disabled={isLoading || isReadOnly}
+              onKeyDown={e => e.key === 'Enter' && !isLoading && sendMessage()}
+              disabled={isLoading}
               aria-label="Type your message to FinBud AI"
             />
             <button
               className={`m-icon-btn m-mic-btn ${isVoiceModeActive ? voiceState : ''}`}
               onClick={toggleVoiceMode}
-              disabled={isReadOnly}
               aria-label={isVoiceModeActive ? 'Stop hands-free voice chat' : 'Start hands-free voice chat'}
             >
               {voiceState === 'processing' && isVoiceModeActive && <i className="fas fa-spinner fa-spin" />}
@@ -444,7 +437,7 @@ export default function ChatMobile() {
             <button
               className="m-icon-btn m-send-btn"
               onClick={() => sendMessage()}
-              disabled={isLoading || isReadOnly}
+              disabled={isLoading}
               aria-label="Send message"
             >
               <i className="fas fa-paper-plane" />
@@ -458,6 +451,7 @@ export default function ChatMobile() {
         <div className="m-modal-overlay" onClick={() => setModal(null)}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%' }}>
             {(modal === 'password' || modal === 'passwordError') && <PasswordSheet />}
+            {modal === 'emergencyCardSelect' && <CardSelectSheet />}
             {modal === 'transferSuccess' && <SuccessSheet type="transfer" />}
             {modal === 'billSuccess'     && <SuccessSheet type="bill"     />}
           </div>
