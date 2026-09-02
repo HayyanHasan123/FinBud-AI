@@ -64,17 +64,41 @@ export function detectSpeechLang(text) {
 }
 
 /**
+ * Known male Urdu/Hindi-family voice names across common platforms —
+ * extend this list as you test on real devices; voice names are NOT
+ * standardized across browsers/OSes, so this needs empirical
+ * verification per platform.
+ */
+const PREFERRED_MALE_VOICE_NAMES = [
+  'Microsoft Asad', 'Microsoft Asad Online (Natural) - Urdu (Pakistan)',
+  'Google اردو', 'Urdu Male', 'Hindi Male',
+]
+
+/**
  * Best-effort lookup of an installed voice matching `lang` (e.g. 'ur-PK').
- * Falls back through progressively looser matches (exact -> language-only
+ * Prefers a known male Urdu-family voice by name first, then falls back
+ * through progressively looser matches (exact lang -> language-only
  * prefix -> null) since most browsers/OSes don't ship a dedicated Urdu
  * voice - when null is returned, `utterance.lang` alone is left to steer
  * the platform's default voice as closely as possible.
+ *
+ * NOTE: browser-native speechSynthesis voice availability, naming, and
+ * gender are not standardized or guaranteed across browsers/devices —
+ * this is a strict improvement over naive lang-matching, but cannot by
+ * itself guarantee identical voice/gender on every platform. See
+ * FinBudVoiceManager's cloud-TTS path for a fix that can.
  */
-function pickVoiceForLang(synth, lang) {
+function pickVoiceForLang(synth, lang, cachedVoices = []) {
   if (!synth || !lang) return null
   let voices = []
   try { voices = synth.getVoices() || [] } catch { voices = [] }
+  if (!voices.length) voices = cachedVoices
   if (!voices.length) return null
+
+  const byPreferredName = voices.find(v =>
+    PREFERRED_MALE_VOICE_NAMES.some(name => v.name?.toLowerCase().includes(name.toLowerCase()))
+  )
+  if (byPreferredName) return byPreferredName
 
   const exact = voices.find(v => v.lang?.toLowerCase() === lang.toLowerCase())
   if (exact) return exact
@@ -94,9 +118,9 @@ export class FinBudVoiceManager {
    *   responsible for sending it to FinBud's backend.
    * @param {(state: 'idle'|'listening'|'processing'|'speaking') => void} opts.onStateChange
    * @param {(error: string) => void} [opts.onError]
-   * @param {string} [opts.lang] - BCP-47 language tag, defaults to 'en-US'.
+   * @param {string} [opts.lang] - BCP-47 language tag, defaults to 'ur-PK'.
    */
-  constructor({ onTranscript, onStateChange, onError, lang = 'en-US' } = {}) {
+  constructor({ onTranscript, onStateChange, onError, lang = 'ur-PK' } = {}) {
     this.onTranscript = onTranscript || (() => {})
     this.onStateChange = onStateChange || (() => {})
     this.onError = onError || (() => {})
@@ -109,6 +133,20 @@ export class FinBudVoiceManager {
     // Guards against onend firing after we've already been told to stop
     // (e.g. user taps the mic button off mid-utterance).
     this._stopRequested = false
+    // synth.getVoices() is notoriously async/empty-on-first-call in many
+    // browsers — the real list only populates once the 'voiceschanged'
+    // event fires. Cache the populated list here so the very first
+    // utterance of a session doesn't silently miss an available voice
+    // just because getVoices() returned [] on the first call.
+    this._cachedVoices = []
+    if (this.synth) {
+      try { this._cachedVoices = this.synth.getVoices() || [] } catch { /* noop */ }
+      if (typeof this.synth.addEventListener === 'function') {
+        this.synth.addEventListener('voiceschanged', () => {
+          try { this._cachedVoices = this.synth.getVoices() || [] } catch { /* noop */ }
+        })
+      }
+    }
 
     this._initRecognition()
   }
@@ -128,8 +166,19 @@ export class FinBudVoiceManager {
 
     recognition.onresult = (event) => {
       const transcript = event.results?.[0]?.[0]?.transcript?.trim()
-      if (transcript) {
-        this._setState(VOICE_STATES.PROCESSING)
+      if (!transcript) return
+
+      // Mark PROCESSING immediately so the UI doesn't feel stuck while a
+      // possible transliteration call is in flight.
+      this._setState(VOICE_STATES.PROCESSING)
+
+      if (URDU_SCRIPT_RE.test(transcript)) {
+        // Browsers only return native-script transcripts for Urdu speech
+        // recognition (no "ur-Latn-PK" locale exists anywhere) — convert
+        // to Roman Urdu server-side before handing off, since the chat
+        // NLP pipeline is built around Roman Urdu / English.
+        this._transliterateAndSend(transcript)
+      } else {
         this.onTranscript(transcript)
       }
     }
@@ -167,6 +216,34 @@ export class FinBudVoiceManager {
     }
 
     this.recognition = recognition
+  }
+
+  /**
+   * Sends an Urdu-script transcript to the backend transliteration
+   * endpoint and hands the Roman-Urdu result to onTranscript. Falls back
+   * to the raw Urdu-script transcript (rather than blocking the turn) if
+   * the call fails or times out — this failure mode is logged, not
+   * surfaced to the user as a hard error.
+   */
+  async _transliterateAndSend(urduTranscript) {
+    try {
+      const res = await fetch('/api/voice/transliterate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text: urduTranscript }),
+      })
+      if (!res.ok) throw new Error(`transliterate HTTP ${res.status}`)
+      const data = await res.json()
+      if (data?.success && data?.text) {
+        this.onTranscript(data.text)
+      } else {
+        throw new Error('transliterate response missing text')
+      }
+    } catch (err) {
+      console.warn('[FinBudVoiceManager] Transliteration failed, falling back to raw transcript:', err)
+      this.onTranscript(urduTranscript)
+    }
   }
 
   _restart() {
@@ -255,7 +332,7 @@ export class FinBudVoiceManager {
     // necessarily the reply language).
     const speechLang = detectSpeechLang(text)
     utterance.lang = speechLang
-    const matchedVoice = pickVoiceForLang(this.synth, speechLang)
+    const matchedVoice = pickVoiceForLang(this.synth, speechLang, this._cachedVoices)
     if (matchedVoice) utterance.voice = matchedVoice
 
     utterance.rate = 1.0
