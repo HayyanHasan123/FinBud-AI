@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Login from './pages/Login.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import ChatResponsive from './pages/ChatResponsive.jsx'
+import TermsGate from './components/shared/TermsGate.jsx'
 
 import { AdminAuthProvider } from './context/AdminAuthContext.jsx'
 import AdminLayout from './components/layout/AdminLayout.jsx'
@@ -22,11 +23,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Customer app — unchanged */}
+        {/* Customer app — /dashboard and /chat gated behind T&C acceptance */}
         <Route path="/" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/chat" element={<ChatResponsive />} />
-
+        <Route path="/dashboard" element={<TermsGate><Dashboard /></TermsGate>} />
+        <Route path="/chat" element={<TermsGate><ChatResponsive /></TermsGate>} />
         {/* Admin console — unlinked from the customer app on purpose.
             /admin/login has no wrapper (not authenticated yet). Every
             other /admin/* route is nested under AdminAuthProvider (session

@@ -152,6 +152,9 @@ def create_goal():
     goal_name = (data.get('goal_name') or '').strip() or None
     target_amount = data.get('target_amount')
     target_date = data.get('target_date')
+    frequency = data.get('frequency')
+    timeline_months = data.get('timeline_months')
+    per_period_amount = data.get('per_period_amount')
 
     if goal_type not in VALID_GOAL_TYPES:
         return jsonify({
@@ -165,16 +168,34 @@ def create_goal():
         except (TypeError, ValueError):
             return jsonify({'success': False, 'message': 'target_amount must be a number'}), 400
 
+    if frequency is not None and frequency not in PERIODS_PER_MONTH:
+        return jsonify({
+            'success': False,
+            'message': f'frequency must be one of: {", ".join(sorted(PERIODS_PER_MONTH))}'
+        }), 400
+
+    if timeline_months is not None:
+        try:
+            timeline_months = float(timeline_months)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': 'timeline_months must be a number'}), 400
+
+    if per_period_amount is not None:
+        try:
+            per_period_amount = float(per_period_amount)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': 'per_period_amount must be a number'}), 400
+
     account_number = session['account_number']
     now_iso = datetime.utcnow().isoformat()
 
     conn = get_pg_conn(); c = conn.cursor()
     c.execute("""
         INSERT INTO savings_goals
-            (account_number, goal_type, goal_name, target_amount, target_date, saved_amount, created_at)
-        VALUES (%s, %s, %s, %s, %s, 0, %s)
+            (account_number, goal_type, goal_name, target_amount, target_date, saved_amount, created_at, frequency, timeline_months, per_period_amount)
+        VALUES (%s, %s, %s, %s, %s, 0, %s, %s, %s, %s)
         RETURNING id, goal_type, goal_name, target_amount, target_date, saved_amount, frequency, timeline_months, per_period_amount
-    """, (account_number, goal_type, goal_name, target_amount, target_date, now_iso))
+    """, (account_number, goal_type, goal_name, target_amount, target_date, now_iso, frequency, timeline_months, per_period_amount))
     new_row = c.fetchone()
     conn.commit()
     release_pg_conn(conn)
@@ -200,7 +221,7 @@ def update_goal(goal_id):
     # saved_amount is intentionally NOT editable here — it only changes via
     # the balance-linked /contribute and /withdraw endpoints below, so the
     # tracked amount can never drift from the user's real balance.
-    allowed_fields = ('target_amount', 'target_date', 'goal_name')
+    allowed_fields = ('target_amount', 'target_date', 'goal_name', 'frequency', 'timeline_months', 'per_period_amount')
     updates = {k: v for k, v in data.items() if k in allowed_fields}
 
     if not updates:

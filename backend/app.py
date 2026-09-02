@@ -425,6 +425,7 @@ def init_user_tables():
         "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_last_sent_at TIMESTAMP",
         "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_requests_count INTEGER DEFAULT 0",
         "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS otp_requests_window_started_at TIMESTAMP",
+        "ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS terms_accepted BOOLEAN DEFAULT FALSE",
     ]:
         try:
             c.execute(stmt); conn.commit()
@@ -1703,7 +1704,7 @@ def get_user_data():
         conn = get_db()
         c    = conn.cursor()
         c.execute("""
-            SELECT account_number, name, phone, balance, points
+            SELECT account_number, name, phone, balance, points, terms_accepted
             FROM dashboard_users WHERE account_number=%s
         """, (account_number,))
         user = c.fetchone()
@@ -1721,12 +1722,33 @@ def get_user_data():
             'balance': float(user['balance']),
             'points':  user['points'],
             'initials': initials,
-            'phone':   user['phone']
+            'phone':   user['phone'],
+            'termsAccepted': bool(user['terms_accepted'])
         })
 
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
+@app.route('/api/user/accept-terms', methods=['POST'])
+def accept_terms():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        account_number = session['account_number']
+        conn = get_db()
+        c    = conn.cursor()
+        c.execute(
+            "UPDATE dashboard_users SET terms_accepted=TRUE WHERE account_number=%s",
+            (account_number,)
+        )
+        conn.commit()
+        release_db(conn)
+        return jsonify({'success': True, 'termsAccepted': True})
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/user/verify-password', methods=['POST'])
 def verify_password():

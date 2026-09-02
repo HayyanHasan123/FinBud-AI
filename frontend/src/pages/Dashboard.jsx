@@ -224,8 +224,8 @@ const TRANSLATIONS = {
   analytics_expenses: { en: 'Expenses', ur: 'اخراجات', roman: 'Kharch' },
   analytics_net: { en: 'Net', ur: 'خالص', roman: 'Net' },
   analytics_safe_to_spend: { en: 'Safe to Spend', ur: 'خرچ کرنے کے لیے محفوظ رقم', roman: 'Safe To Spend' },
-  analytics_suggested_savings: { en: 'Suggested Savings (20%)', ur: 'تجویز کردہ بچت (20%)', roman: 'Tajweez Kardah Bachat (20%)' },
-  analytics_suggested_investment: { en: 'Suggested Investment (10%)', ur: 'تجویز کردہ سرمایہ کاری (10%)', roman: 'Tajweez Kardah Sarmaya Kari (10%)' },
+  analytics_suggested_savings: { en: 'Suggested Savings (15%)', ur: 'تجویز کردہ بچت (15%)', roman: 'Tajweez Kardah Bachat (15%)' },
+  analytics_suggested_investment: { en: 'Suggested Investment (5%)', ur: 'تجویز کردہ سرمایہ کاری (5%)', roman: 'Tajweez Kardah Sarmaya Kari (5%)' },
   analytics_summary_empty: { en: "Income vs. expense tracking is coming online soon — this card will populate automatically once it's connected on the backend.", ur: 'آمدنی اور اخراجات کی ٹریکنگ جلد شروع ہو رہی ہے — بیک اینڈ سے منسلک ہوتے ہی یہ کارڈ خود بخود بھر جائے گا۔', roman: 'Income Vs Expense Tracking Jald Shuru Ho Rahi Hai — Yeh Card Backend Se Connect Hote Hi Khud Bhar Jayega.' },
   analytics_credit_score: { en: 'Credit Score', ur: 'کریڈٹ سکور', roman: 'Credit Score' },
   analytics_late_payments: { en: 'Late Payments', ur: 'تاخیر سے ادائیگیاں', roman: 'Late Payments' },
@@ -2919,7 +2919,7 @@ export default function Dashboard() {
               </main>
             ) : activeView === 'advisor' ? (
               <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
-                <AnalyticsView t={t} advisor={advisor} reminders={reminders} breakdownEntries={breakdownEntries} breakdownTotal={breakdownTotal} isMobile={isMobile} simpleMode={simpleMode} speak={speak} setModal={setModal} />
+                <AnalyticsView t={t} advisor={advisor} reminders={reminders} breakdownEntries={breakdownEntries} breakdownTotal={breakdownTotal} isMobile={isMobile} simpleMode={simpleMode} speak={speak} setModal={setModal}/>
               </main>
             ) : activeView === 'growmymoney' ? (
               <main onClick={() => { setRemindersOpen(false); setTxNotifOpen(false); setOpenMenuId(null) }}>
