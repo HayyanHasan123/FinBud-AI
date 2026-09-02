@@ -1241,8 +1241,10 @@ export default function Dashboard() {
 
     function handleSubmit(e) {
       e.preventDefault()
-      if (!billId.trim()) { setError('Please enter your bill reference number.'); return }
-      setPendingBill(pb => ({ ...pb, billId: billId.trim() }))
+      const trimmed = billId.trim()
+      if (!trimmed) { setError('Please enter your bill reference number.'); return }
+      if (!/^\d{4,20}$/.test(trimmed)) { setError('Reference number must contain digits only.'); return }
+      setPendingBill(pb => ({ ...pb, billId: trimmed }))
       setModal({ type: 'payBill4' })
     }
 
@@ -1264,7 +1266,16 @@ export default function Dashboard() {
             </div>
           )}
           <label>{t('bill_reference')}</label>
-          <input type="text" required autoFocus placeholder="Enter reference number" value={billId} onChange={e => setBillId(e.target.value)} />
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            required
+            autoFocus
+            placeholder="Enter reference number"
+            value={billId}
+            onChange={e => setBillId(e.target.value.replace(/\D/g, ''))}
+          />
           {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{error}</p>}
           <button type="submit" className="modal-btn-primary">{t('btn_continue')}</button>
           <button type="button" className="modal-btn-secondary" onClick={() => setModal({ type: 'payBill2' })}>{t('btn_back')}</button>
