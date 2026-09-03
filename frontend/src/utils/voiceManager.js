@@ -139,6 +139,9 @@ export class FinBudVoiceManager {
     // utterance of a session doesn't silently miss an available voice
     // just because getVoices() returned [] on the first call.
     this._cachedVoices = []
+    // Currently-playing cloud-TTS <audio> element (Urdu path only), so
+    // stop() can halt it the same way it halts local speechSynthesis.
+    this._currentAudio = null
     if (this.synth) {
       try { this._cachedVoices = this.synth.getVoices() || [] } catch { /* noop */ }
       if (typeof this.synth.addEventListener === 'function') {
@@ -281,6 +284,12 @@ export class FinBudVoiceManager {
     this.isVoiceModeActive = false
     try { this.recognition?.stop() } catch { /* noop */ }
     try { this.synth?.cancel() } catch { /* noop */ }
+    try {
+      if (this._currentAudio) {
+        this._currentAudio.pause()
+        this._currentAudio = null
+      }
+    } catch { /* noop */ }
     this._setState(VOICE_STATES.IDLE)
   }
 
@@ -313,32 +322,20 @@ export class FinBudVoiceManager {
    * (default), automatically starts listening again once speech finishes —
    * this is what makes the conversation "hands-free continuous" rather than
    * a single push-to-talk exchange.
+   *
+   * For Urdu-script or Roman-Urdu replies, this tries the backend cloud
+   * voice first (see /api/voice/synthesize) so every device — mobile or
+   * laptop — hears the same real Urdu-accented voice, since most
+   * browsers/OSes have no Urdu voice installed and would otherwise read
+   * Urdu/Roman-Urdu text aloud in the default English voice. English
+   * replies keep using the fast local browser voice unchanged.
    */
   speak(text, { reArm = true } = {}) {
-    if (!this.synth || !text) {
+    if (!text) {
       if (this.isVoiceModeActive && reArm) this.startListening()
       else this._setState(VOICE_STATES.IDLE)
       return
     }
-
-    this.synth.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
-
-    // Dynamic language detection: an Urdu-script or Roman-Urdu reply must
-    // be read with an Urdu voice, not the default English one - toggle
-    // utterance.lang (and pick a matching installed voice when one
-    // exists) based on the actual text being spoken, rather than always
-    // using this.lang (which reflects the recognition language, not
-    // necessarily the reply language).
-    const speechLang = detectSpeechLang(text)
-    utterance.lang = speechLang
-    const matchedVoice = pickVoiceForLang(this.synth, speechLang, this._cachedVoices)
-    if (matchedVoice) utterance.voice = matchedVoice
-
-    utterance.rate = 1.0
-    utterance.pitch = 1.0
-
-    this._setState(VOICE_STATES.SPEAKING)
 
     const finish = () => {
       if (this.isVoiceModeActive && reArm && !this._stopRequested) {
@@ -348,10 +345,80 @@ export class FinBudVoiceManager {
       }
     }
 
+    const speechLang = detectSpeechLang(text)
+    this._setState(VOICE_STATES.SPEAKING)
+
+    if (speechLang === 'ur-PK') {
+      this._speakUrdu(text, finish)
+      return
+    }
+
+    this._speakLocal(text, speechLang, finish)
+  }
+
+  /**
+   * Local browser speechSynthesis path — used for English, and as the
+   * fallback for Urdu when the cloud voice is unavailable/fails.
+   */
+  _speakLocal(text, speechLang, finish) {
+    if (!this.synth) {
+      finish()
+      return
+    }
+
+    this.synth.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = speechLang
+    const matchedVoice = pickVoiceForLang(this.synth, speechLang, this._cachedVoices)
+    if (matchedVoice) utterance.voice = matchedVoice
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+
     utterance.onend = finish
     utterance.onerror = finish
 
     this.synth.speak(utterance)
+  }
+
+  /**
+   * Cloud-TTS path for Urdu/Roman-Urdu: fetches real Urdu-accented audio
+   * from the backend and plays it through an <audio> element, so the
+   * accent is consistent across every device instead of depending on
+   * whatever (if any) Urdu voice happens to be installed locally.
+   * Falls back to _speakLocal() on any failure so a flaky network never
+   * silences a reply.
+   */
+  async _speakUrdu(text, finish) {
+    // Stop any local speech that might still be running.
+    try { this.synth?.cancel() } catch { /* noop */ }
+
+    try {
+      const res = await fetch('/api/voice/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) throw new Error(`synthesize HTTP ${res.status}`)
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      this._currentAudio = audio
+
+      const cleanup = () => {
+        URL.revokeObjectURL(url)
+        if (this._currentAudio === audio) this._currentAudio = null
+        finish()
+      }
+
+      audio.onended = cleanup
+      audio.onerror = cleanup
+      await audio.play()
+    } catch (err) {
+      console.warn('[FinBudVoiceManager] Cloud Urdu voice failed, falling back to local voice:', err)
+      this._speakLocal(text, 'ur-PK', finish)
+    }
   }
 
   /** Convenience alias matching the "speak, then re-listen" loop. */
