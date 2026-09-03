@@ -67,7 +67,7 @@ export function useChatController() {
       // Always delegates to the CURRENT sendMessage via the ref kept in
       // sync below, instead of closing over this (mount-time) render's
       // sendMessage directly - see sendMessageRef's declaration for why.
-      lang: 'ur-PK',
+      
       onTranscript: (transcript) => { sendMessageRef.current(transcript) },
       onStateChange: (state) => setVoiceState(state),
       onError: (err) => {
