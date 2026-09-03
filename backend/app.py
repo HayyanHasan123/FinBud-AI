@@ -23,7 +23,7 @@
 
 from flask import (
     Flask, render_template, request, jsonify, session, redirect,
-    url_for, send_from_directory
+    url_for, send_from_directory, Response
 )
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -41,6 +41,7 @@ import secrets
 import sys
 import os
 import io
+import re
 import time
 import logging
 
@@ -82,6 +83,21 @@ try:
 except ImportError:
     LLM_AVAILABLE = False
     print("Warning: llm_fallback not available — running regex-only mode.")
+
+# ── Optional: cloud text-to-speech (real Urdu-accented voice) ───────────────
+# Browser-native speechSynthesis frequently has NO installed Urdu voice at
+# all (especially on Windows/Android Chrome), so it silently falls back to
+# the default English voice for Urdu/Roman-Urdu replies - which is the
+# "same voice, wrong accent, can't pronounce it" bug. gTTS calls Google's
+# Urdu TTS engine server-side, so every device gets the identical proper
+# Urdu voice instead of whatever (if anything) happens to be installed
+# locally. See /api/voice/synthesize below.
+try:
+    from gtts import gTTS
+    GTTS_AVAILABLE = True
+except ImportError:
+    GTTS_AVAILABLE = False
+    print("Warning: gTTS not installed — Urdu voice replies will fall back to the browser's local voice.")
 
 logger = logging.getLogger(__name__)
 
@@ -1639,6 +1655,85 @@ def voice_transliterate():
     except Exception as e:
         print(f"Transliteration error: {str(e)}")
         return jsonify({'success': False, 'message': 'Error transliterating text'}), 500
+
+
+# Urdu-script Unicode range — mirrors URDU_SCRIPT_RE in voiceManager.js.
+_URDU_SCRIPT_RE = re.compile(r'[\u0600-\u06FF]')
+
+# Common Roman-Urdu words/particles — mirrors ROMAN_URDU_WORD_RE in
+# voiceManager.js, so the backend agrees with the frontend on what counts
+# as "this needs an Urdu voice".
+_ROMAN_URDU_WORD_RE = re.compile(
+    r'\b(hai|hain|kya|kaise|karo|karein|kardo|kar\s*do|bhejo|bhej|bhejna|paisa|'
+    r'paise|paisay|rupay|rupaye|rupaya|aap|apka|apki|shukriya|mera|meri|mere|'
+    r'nahi|nahin|krna|kro|karna|bilkul|theek|acha|zaroor|maloom|batao)\b',
+    re.IGNORECASE,
+)
+
+
+@app.route('/api/voice/synthesize', methods=['POST'])
+def voice_synthesize():
+    """Synthesize Urdu/Roman-Urdu text into real Urdu-accented speech audio.
+
+    voiceManager.js calls this for any reply it detects as Urdu-script or
+    Roman Urdu, instead of relying on the browser's local speechSynthesis
+    voice — most devices simply don't ship an Urdu voice, so the browser
+    silently reads Urdu/Roman-Urdu text with its default English voice
+    (wrong accent, mangled pronunciation). This renders the audio
+    server-side with a real Urdu voice so every device — mobile or laptop —
+    hears the same correct Urdu accent.
+
+    Roman Urdu input is first transliterated to Urdu script (never
+    translated) since TTS engines pronounce Latin-script text using
+    English phonics; genuine Urdu script gives correct pronunciation.
+
+    Returns raw MP3 bytes (audio/mpeg) on success. Callers should treat
+    any non-200 response as "fall back to local browser TTS" rather than
+    a hard failure — this endpoint is a pronunciation upgrade, not a
+    required step.
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    if not GTTS_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Voice synthesis not available'}), 503
+
+    try:
+        data = request.json or {}
+        text = (data.get('text') or '').strip()
+
+        if not text:
+            return jsonify({'success': False, 'message': 'Empty text'}), 400
+        if len(text) > 2000:
+            text = text[:2000]
+
+        is_urdu_script = bool(_URDU_SCRIPT_RE.search(text))
+        is_roman_urdu = bool(_ROMAN_URDU_WORD_RE.search(text))
+
+        if not is_urdu_script and not is_roman_urdu:
+            # Plain English — the browser's default voice already handles
+            # this fine, so there's nothing for the cloud voice to fix.
+            return jsonify({'success': False, 'message': 'Not Urdu/Roman-Urdu text'}), 422
+
+        speech_text = text
+        if is_roman_urdu and not is_urdu_script and LLM_AVAILABLE:
+            from llm_fallback import transliterate_roman_to_urdu_script
+            converted = transliterate_roman_to_urdu_script(text)
+            if converted:
+                speech_text = converted
+            # else: fall through and hand gTTS the raw Roman Urdu text —
+            # worse pronunciation than a proper conversion, but still uses
+            # the correct Urdu voice/accent rather than failing the turn.
+
+        audio_buffer = io.BytesIO()
+        gTTS(text=speech_text, lang='ur').write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+
+        return Response(audio_buffer.read(), mimetype='audio/mpeg')
+
+    except Exception as e:
+        print(f"Voice synthesis error: {str(e)}")
+        return jsonify({'success': False, 'message': 'Error synthesizing speech'}), 500
 
 
 @app.route('/api/chat/human-handoff', methods=['POST'])

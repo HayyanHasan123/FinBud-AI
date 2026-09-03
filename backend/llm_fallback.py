@@ -526,3 +526,73 @@ def transliterate_urdu_to_roman(
     except Exception as exc:
         logger.error("Urdu transliteration call failed: %s", exc)
         return None
+
+
+# ── Roman Urdu → Urdu-script transliteration ────────────────────────────────
+#
+# Used by the voice pipeline in the OTHER direction from the function above:
+# to speak a reply aloud with a genuine Urdu voice/accent (see
+# /api/voice/synthesize in app.py), the text-to-speech engine needs real
+# Urdu-script input. Feeding it Roman Urdu ("aap ka balance kya hai") makes
+# TTS engines read it with English/default pronunciation rules, which is
+# exactly the "wrong accent" bug this exists to fix - so Roman Urdu replies
+# are converted to Urdu script here first, then handed to TTS.
+#
+# IMPORTANT: same rule as above - phonetic TRANSLITERATION only, never a
+# translation. "mera balance kya hai" must become "میرا بیلنس کیا ہے", never
+# an English paraphrase.
+
+ROMAN_TO_URDU_SCRIPT_SYSTEM_PROMPT = """You are a phonetic transliteration engine for a Pakistani banking chatbot.
+
+Your ONLY job: convert Roman Urdu text (Urdu written in Latin/English letters) into Urdu script (Nastaliq/Arabic script), preserving the original meaning and word order EXACTLY.
+
+Rules:
+1. This is TRANSLITERATION, not translation. Do not paraphrase, summarize, or change meaning. Every word must be converted phonetically into Urdu script, not swapped for a different word.
+2. Preserve all numbers, amounts, phone numbers, and account/reference numbers EXACTLY as digits - never spell them out or alter them.
+3. Keep any already-English words (brand names, "OK", "PIN", etc.) as-is in Latin script if converting them to Urdu script would be unnatural; otherwise transliterate them into Urdu script too.
+4. Output ONLY the Urdu-script text. No quotes, no explanation, no preamble, no markdown.
+5. If the input contains a mix of Roman Urdu and plain English sentences, transliterate the Roman Urdu parts into Urdu script and keep genuine English parts in Latin script.
+
+Respond with the transliterated Urdu-script text and nothing else."""
+
+
+def transliterate_roman_to_urdu_script(
+    roman_text: str,
+    api_key: str = None,
+    model: str = "openai/gpt-oss-120b",
+) -> Optional[str]:
+    """Transliterate Roman Urdu text to Urdu script using the LLM.
+
+    Mirrors transliterate_urdu_to_roman() but runs in the opposite
+    direction, so replies can be read aloud with a proper Urdu-accented
+    voice instead of the default English voice mispronouncing Roman Urdu.
+
+    Returns None (rather than raising) on any failure, so callers - the
+    voice-synthesis endpoint in particular - can fall back to a
+    browser-native voice instead of blocking the reply.
+    """
+    if not roman_text or not roman_text.strip():
+        return None
+
+    if not GROQ_AVAILABLE:
+        logger.warning("Reverse transliteration skipped: groq package not installed.")
+        return None
+
+    try:
+        client = Groq(api_key=api_key or os.environ.get("GROQ_API_KEY"))
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": ROMAN_TO_URDU_SCRIPT_SYSTEM_PROMPT},
+                {"role": "user", "content": roman_text},
+            ],
+            temperature=0.0,
+            max_tokens=300,
+        )
+        result = response.choices[0].message.content
+        if result:
+            return result.strip()
+        return None
+    except Exception as exc:
+        logger.error("Roman-to-Urdu-script transliteration call failed: %s", exc)
+        return None
