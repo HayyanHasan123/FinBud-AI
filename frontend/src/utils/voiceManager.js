@@ -120,7 +120,7 @@ export class FinBudVoiceManager {
    * @param {(error: string) => void} [opts.onError]
    * @param {string} [opts.lang] - BCP-47 language tag, defaults to 'ur-PK'.
    */
-  constructor({ onTranscript, onStateChange, onError, lang = 'ur-PK' } = {}) {
+  constructor({ onTranscript, onStateChange, onError, lang = 'en-US' } = {}) {
     this.onTranscript = onTranscript || (() => {})
     this.onStateChange = onStateChange || (() => {})
     this.onError = onError || (() => {})
